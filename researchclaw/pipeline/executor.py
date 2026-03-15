@@ -3873,12 +3873,31 @@ def _execute_result_analysis(
         "latex_table": exp_data["latex_table"],
         "generated": _utcnow_iso(),
     }
+    # R13-1: Detect zero-variance across conditions (all conditions identical primary metric)
+    if _condition_summaries and len(_condition_summaries) >= 2:
+        _primary_vals = []
+        for _cs in _condition_summaries.values():
+            if isinstance(_cs, dict):
+                _pm = _cs.get("primary_metric", {})
+                _pv = _pm.get("mean") if isinstance(_pm, dict) else _pm
+                if isinstance(_pv, (int, float)):
+                    _primary_vals.append(_pv)
+        if len(_primary_vals) >= 2 and len(set(_primary_vals)) == 1:
+            _zv_warn = (
+                f"ZERO VARIANCE: All {len(_primary_vals)} conditions have "
+                f"identical primary_metric ({_primary_vals[0]}). "
+                f"Experiment condition wiring is likely broken."
+            )
+            _ablation_warnings.append(_zv_warn)
+            logger.warning("R13-1: %s", _zv_warn)
+
     if _ablation_warnings:
         summary_payload["ablation_warnings"] = _ablation_warnings
     if _all_paired:
         summary_payload["paired_comparisons"] = _all_paired
     if _condition_summaries:
         summary_payload["condition_summaries"] = _condition_summaries
+        summary_payload["condition_metrics"] = _condition_summaries  # alias for quality gate
         summary_payload["total_conditions"] = _total_conditions
     if _total_metrics:
         summary_payload["total_metric_keys"] = _total_metrics

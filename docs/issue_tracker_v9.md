@@ -11,14 +11,15 @@
 | Category | Total | Fixed | Partial | Open |
 |----------|-------|-------|---------|------|
 | LaTeX & Title | 5 | 5 | 0 | 0 |
-| Experiment Quality | 6 | 5 | 1 | 0 |
-| Code Generation | 4 | 3 | 1 | 0 |
+| Experiment Quality | 6 | 6 | 0 | 0 |
+| Code Generation | 4 | 4 | 0 | 0 |
 | Writing Quality | 5 | 5 | 0 | 0 |
 | Literature & Citations | 4 | 4 | 0 | 0 |
 | Infrastructure (Docker) | 5 | 5 | 0 | 0 |
-| Pipeline Logic | 3 | 1 | 1 | 1 |
-| **New Feature Requests** | 1 | 1 | 0 | 0 |
-| **Total** | **33** | **29** | **3** | **1** |
+| Pipeline Logic | 3 | 3 | 0 | 0 |
+| New Feature Requests | 1 | 1 | 0 | 0 |
+| Run 13 Findings | 3 | 3 | 0 | 0 |
+| **Total** | **36** | **36** | **0** | **0** |
 
 ---
 
@@ -70,16 +71,16 @@
 - **Fix**: Added `multi_seed_enforcement` block in `prompts.py` with mandatory implementation pattern (3-5 seeds), adaptive seed count, and concrete code template. Injected into code_generation for all sandbox/docker experiments via `executor.py`.
 - **Files**: `prompts.py` (new `multi_seed_enforcement` block), `executor.py:2145-2149`
 
-### I-07: Ablation methods produce identical outputs (PARTIAL)
+### I-07: Ablation methods produce identical outputs (FIXED)
 - **Severity**: High
-- **Status**: PARTIAL — detection exists, prevention incomplete
+- **Status**: FIXED — v9.1 patch
 - **Evidence**: Run 12 — ablation checker flagged many identical conditions
 - **Files**:
-  - `executor.py:3776-3815` — identical condition detection (WORKS)
-  - `executor.py:4491-4560` — `_check_ablation_effectiveness()` (WORKS)
-  - `prompts.py:969+` — stronger ablation guidance (HELPS, not sufficient)
-- **Root Cause**: LLM code generation creates `class AblationB(Baseline): pass` empty subclasses
-- **Fix**: Deeper AST validation that ablation class overrides at least one method.
+  - `executor.py:3838-3866` — identical condition detection (WORKS)
+  - `executor.py:3876+` — zero-variance detection across all conditions (NEW)
+  - `validator.py:607-658` — deep AST ablation override check (NEW)
+  - `prompts.py:969+` — stronger ablation guidance
+- **Fix**: Added Check 5 in `validate_experiment_classes()` — compares AST dumps of overridden methods between child and parent classes. If all overrides are identical AST, warns that ablation is fake. Also added R13-1 zero-variance detection in executor analysis stage.
 
 ### I-08: RL training steps insufficient (FIXED)
 - **Severity**: High
@@ -129,11 +130,11 @@
 - **File**: `prompts.py` — CRITICAL NO SIMULATION rule
 - **Fix**: Prohibit fake training loops with synthetic loss values
 
-### I-15: Missing experiment harness integration (PARTIAL)
+### I-15: Missing experiment harness integration (FIXED)
 - **Severity**: Medium
-- **Status**: PARTIAL — harness injection works, but generated code doesn't always use it
-- **File**: `docker_sandbox.py:149-156` — `_inject_harness()`
-- **Evidence**: Some runs produce code that ignores the harness and reports metrics differently
+- **Status**: FIXED — v9.1 patch
+- **File**: `docker_sandbox.py:215-222` — `_inject_harness()`, `prompts.py:288-302` — harness guidance
+- **Fix**: Changed harness from "RECOMMENDED" to "MANDATORY" in compute_budget prompt block. Added explicit `check_value()` NaN detection and `finalize()` requirement with code examples.
 
 ---
 
@@ -207,22 +208,22 @@
 
 ## 7. Pipeline Logic Issues
 
-### I-30: Pipeline proceeds after MAX_DECISION_PIVOTS=2 (BY DESIGN)
+### I-30: Pipeline proceeds after MAX_DECISION_PIVOTS=2 — quality gate added (FIXED)
 - **Severity**: Medium
-- **Status**: BY DESIGN — prevents infinite loops
-- **File**: `executor.py`
-- **Note**: Pipeline writes paper even if experiment quality is low after 2 pivots
+- **Status**: FIXED — v9.1 patch (quality gate added, MAX_PIVOTS=2 kept by design)
+- **Files**: `runner.py:299-321` — quality gate check, `runner.py:697-756` — `_check_experiment_quality()`
+- **Fix**: Added `_check_experiment_quality()` function that runs before forced PROCEED. Checks: (1) all metrics zero, (2) all conditions identical primary_metric (R13-1), (3) too many ablation warnings, (4) analysis quality score < 3. If any check fails, writes `quality_warning.txt` to run directory and logs QUALITY WARNING. Pipeline still proceeds but the warning is preserved for review.
 
 ### I-31: LLM code review JSON parsing failure (FIXED)
 - **Status**: FIXED — commit `44151b1`
 - **File**: `executor.py:2300-2330`
 - **Fix**: Markdown fence stripping, graceful fallback
 
-### I-32: Topic quality not validated against trends (OPEN)
+### I-32: Topic quality not validated against trends (FIXED)
 - **Severity**: Medium
-- **Status**: OPEN — IMP-35 adds pre-evaluation but no trend checking
-- **File**: `executor.py` (topic quality pre-evaluation)
-- **Potential Fix**: Phase 4 — benchmark discovery system
+- **Status**: FIXED — v9.1 patch
+- **File**: `prompts.py:986-996` — topic_init prompt
+- **Fix**: Added TREND VALIDATION requirement to topic_init prompt: must identify 2-3 recent papers (2024-2026) for relevance, name specific benchmark/dataset, state SOTA results, and include a 'Benchmark' subsection.
 
 ---
 
@@ -355,6 +356,29 @@ FRAMEWORK_KEYWORDS = {
 
 ---
 
+## 9. Run 13 Findings (RL Benchmark — PPO/SAC/TD3 with PER on MuJoCo)
+
+### R13-1: All conditions produce identical metrics (FIXED)
+- **Severity**: Critical
+- **Status**: FIXED — v9.1 patch
+- **Evidence**: Run 13 — all 6 algorithm/PER conditions had identical primary_metric (0.1074)
+- **Root Cause**: Condition → implementation mapping broken in generated code; ablation checker caught it but too late
+- **Fix**: Added zero-variance detection in executor.py analysis stage (line 3876+). Added to `_check_experiment_quality()` gate in runner.py. AST validation in validator.py now catches fake ablation subclasses.
+
+### R13-2: Gymnasium v4 environments deprecated (FIXED)
+- **Severity**: Medium
+- **Status**: FIXED — v9.1 patch
+- **Evidence**: Run 13 warnings: "The environment HalfCheetah-v4 is out of date"
+- **Fix**: Added v5 environment requirement to `rl_step_guidance` prompt block in prompts.py.
+
+### R13-3: No learning curve logging for RL (FIXED)
+- **Severity**: Medium
+- **Status**: FIXED — v9.1 patch
+- **Evidence**: Run 13 only reported final metrics, no step-by-step evaluation
+- **Fix**: Added learning curve logging requirement to `rl_step_guidance` prompt: `EVAL:` lines every N_eval steps, `LEARNING_CURVE:` summary at end.
+
+---
+
 ## Appendix A: Issue-to-Run Mapping
 
 | Run | Issues Hit | Quality Score |
@@ -363,7 +387,7 @@ FRAMEWORK_KEYWORDS = {
 | Run 8-10 | I-09, I-10, I-25, I-27 | Not scored |
 | Run 11 | I-01 (OK), I-06, I-09 (QLoRA diverge) | 7/10 |
 | Run 12 | I-01, I-06, I-07, I-15 | 7.5/10 |
-| Run 13 | I-06, I-08 | Running... |
+| Run 13 | I-06, I-07, I-08, I-30, R13-1/2/3 | 3/10 (REFINE decision) |
 
 ## Appendix B: Fix Commit Reference
 
