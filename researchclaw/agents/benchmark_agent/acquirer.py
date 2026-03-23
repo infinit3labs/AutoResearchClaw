@@ -21,10 +21,44 @@ class AcquirerAgent(BaseAgent):
 
     name = "acquirer"
 
+    @staticmethod
+    def _format_validation_feedback(feedback: dict[str, Any] | None) -> str:
+        """Render validator feedback for retry-aware regeneration prompts."""
+        if not isinstance(feedback, dict):
+            return ""
+
+        parts: list[str] = []
+        errors = [str(item) for item in feedback.get("errors", []) if str(item).strip()]
+        warnings = [str(item) for item in feedback.get("warnings", []) if str(item).strip()]
+        suggestions = [
+            str(item) for item in feedback.get("suggestions", []) if str(item).strip()
+        ]
+        iteration = feedback.get("iteration")
+
+        if iteration:
+            parts.append(f"Previous validation iteration: {iteration}")
+        if errors:
+            parts.append("Errors to fix:")
+            parts.extend(f"- {item}" for item in errors)
+        if warnings:
+            parts.append("Warnings to address when possible:")
+            parts.extend(f"- {item}" for item in warnings)
+        if suggestions:
+            parts.append("Reviewer suggestions:")
+            parts.extend(f"- {item}" for item in suggestions)
+
+        if not parts:
+            return ""
+        return (
+            "PRIOR VALIDATION FEEDBACK (fix these issues in this revision):\n"
+            + "\n".join(parts)
+        )
+
     def _generate_data_loader(
         self,
         benchmarks: list[dict[str, Any]],
         topic: str,
+        validation_feedback: dict[str, Any] | None = None,
     ) -> str:
         """Ask LLM to generate a robust data loading function."""
         bench_specs = []
@@ -51,12 +85,15 @@ class AcquirerAgent(BaseAgent):
             "- For pre-cached datasets (tier 1), use download=False\n"
             "- For downloadable datasets (tier 2), use download=True in setup.py\n"
             "- Include a DATA_CONFIG dict with dataset metadata (num_classes, input_shape, etc.)\n\n"
+            "- If prior validation feedback is provided, FIX every listed issue.\n\n"
             "Return ONLY the Python code, no explanation."
         )
+        feedback_block = self._format_validation_feedback(validation_feedback)
         user = (
             f"Research Topic: {topic}\n\n"
             f"Datasets to load:\n" + "\n".join(bench_specs) + "\n\n"
-            "Generate the data loading code."
+            + (feedback_block + "\n\n" if feedback_block else "")
+            + "Generate the data loading code."
         )
         return self._chat(system, user, max_tokens=4096, temperature=0.2)
 
@@ -65,6 +102,7 @@ class AcquirerAgent(BaseAgent):
         baselines: list[dict[str, Any]],
         benchmarks: list[dict[str, Any]],
         topic: str,
+        validation_feedback: dict[str, Any] | None = None,
     ) -> str:
         """Ask LLM to generate baseline method instantiation code."""
         base_specs = []
@@ -92,14 +130,17 @@ class AcquirerAgent(BaseAgent):
             "- Adapt final layer to match num_classes of the target dataset\n"
             "- Include a BASELINES_CONFIG dict with metadata (param_count, paper, etc.)\n"
             "- Handle missing optional packages gracefully\n\n"
+            "- If prior validation feedback is provided, FIX every listed issue.\n\n"
             "Return ONLY the Python code, no explanation."
         )
+        feedback_block = self._format_validation_feedback(validation_feedback)
         user = (
             f"Research Topic: {topic}\n"
             f"Primary Dataset: {primary_bench.get('name', 'N/A')} "
             f"({primary_bench.get('classes', '?')} classes)\n\n"
             f"Baseline Methods:\n" + "\n".join(base_specs) + "\n\n"
-            "Generate the baseline instantiation code."
+            + (feedback_block + "\n\n" if feedback_block else "")
+            + "Generate the baseline instantiation code."
         )
         return self._chat(system, user, max_tokens=4096, temperature=0.2)
 
@@ -235,6 +276,7 @@ class AcquirerAgent(BaseAgent):
         benchmarks = selection.get("selected_benchmarks", [])
         baselines = selection.get("selected_baselines", [])
         required_pip = selection.get("required_pip", [])
+        validation_feedback = context.get("validation_feedback")
 
         if not benchmarks:
             return self._make_result(False, error="No benchmarks selected")
@@ -242,7 +284,11 @@ class AcquirerAgent(BaseAgent):
         # 1. Generate data loading code
         self.logger.info("Generating data loading code for %d datasets", len(benchmarks))
         data_loader_code = self._strip_fences(
-            self._generate_data_loader(benchmarks, topic)
+            self._generate_data_loader(
+                benchmarks,
+                topic,
+                validation_feedback=validation_feedback,
+            )
         )
 
         # 2. Generate baseline code
@@ -250,7 +296,12 @@ class AcquirerAgent(BaseAgent):
         if baselines:
             self.logger.info("Generating baseline code for %d methods", len(baselines))
             baseline_code = self._strip_fences(
-                self._generate_baseline_code(baselines, benchmarks, topic)
+                self._generate_baseline_code(
+                    baselines,
+                    benchmarks,
+                    topic,
+                    validation_feedback=validation_feedback,
+                )
             )
 
         # 3. Generate setup.py

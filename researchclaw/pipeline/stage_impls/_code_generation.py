@@ -168,28 +168,42 @@ def _execute_code_generation(
         try:
             import json as _json_bp
             _bp_data = _json_bp.loads(_bp_path.read_text(encoding="utf-8"))
-            # Reconstruct the prompt block
-            from researchclaw.agents.benchmark_agent.orchestrator import BenchmarkPlan
-            _bp = BenchmarkPlan(
-                selected_benchmarks=_bp_data.get("selected_benchmarks", []),
-                selected_baselines=_bp_data.get("selected_baselines", []),
-                data_loader_code=_bp_data.get("data_loader_code", ""),
-                baseline_code=_bp_data.get("baseline_code", ""),
-                experiment_notes=_bp_data.get("experiment_notes", ""),
-            )
-            _bp_block = _bp.to_prompt_block()
-            if _bp_block:
-                extra_guidance += (
-                    "\n\n## BenchmarkAgent Selections (USE THESE)\n"
-                    "The following datasets, baselines, and code snippets were "
-                    "automatically selected and validated by the BenchmarkAgent. "
-                    "You MUST use these selections in your experiment code.\n\n"
-                    + _bp_block
+            if not _bp_data.get("validation_passed", False):
+                logger.warning(
+                    "BA: benchmark_plan.json failed validation; skipping "
+                    "benchmark code injection into Stage 10"
                 )
-                logger.info(
-                    "BA: Injected benchmark plan (%d benchmarks, %d baselines)",
-                    len(_bp.selected_benchmarks), len(_bp.selected_baselines),
+            else:
+                # Reconstruct the prompt block
+                from researchclaw.agents.benchmark_agent.orchestrator import BenchmarkPlan
+                _bp = BenchmarkPlan(
+                    selected_benchmarks=_bp_data.get("selected_benchmarks", []),
+                    selected_baselines=_bp_data.get("selected_baselines", []),
+                    data_loader_code=_bp_data.get("data_loader_code", ""),
+                    baseline_code=_bp_data.get("baseline_code", ""),
+                    setup_code=_bp_data.get("setup_code", ""),
+                    requirements=_bp_data.get("requirements", ""),
+                    experiment_notes=_bp_data.get("experiment_notes", ""),
+                    validation_passed=bool(_bp_data.get("validation_passed", False)),
+                    validation_errors=_bp_data.get("validation_errors", []),
+                    validation_warnings=_bp_data.get("validation_warnings", []),
+                    validation_suggestions=_bp_data.get(
+                        "validation_suggestions", []
+                    ),
                 )
+                _bp_block = _bp.to_prompt_block()
+                if _bp_block:
+                    extra_guidance += (
+                        "\n\n## BenchmarkAgent Selections (USE THESE)\n"
+                        "The following datasets, baselines, and code snippets were "
+                        "automatically selected and validated by the BenchmarkAgent. "
+                        "You MUST use these selections in your experiment code.\n\n"
+                        + _bp_block
+                    )
+                    logger.info(
+                        "BA: Injected benchmark plan (%d benchmarks, %d baselines)",
+                        len(_bp.selected_benchmarks), len(_bp.selected_baselines),
+                    )
         except Exception as _bp_exc:
             logger.debug("BA: Failed to load benchmark plan: %s", _bp_exc)
 
@@ -484,42 +498,64 @@ def _execute_code_generation(
             domain_profile=_domain_profile,
             code_search_result=_code_search_result,
         )
-        _agent_result = _agent.generate(
-            topic=config.research.topic,
-            exp_plan=exp_plan,
-            metric=metric,
-            pkg_hint=pkg_hint + "\n" + compute_budget + "\n" + extra_guidance,
-            max_tokens=_code_max_tokens,
-        )
-        files = _agent_result.files
-        _code_agent_active = True
-
-        # Write agent artifacts
-        (stage_dir / "code_agent_log.json").write_text(
-            json.dumps(
-                {
-                    "log": _agent_result.validation_log,
-                    "llm_calls": _agent_result.total_llm_calls,
-                    "sandbox_runs": _agent_result.total_sandbox_runs,
-                    "best_score": _agent_result.best_score,
-                    "tree_nodes_explored": _agent_result.tree_nodes_explored,
-                    "review_rounds": _agent_result.review_rounds,
-                },
-                indent=2,
-            ),
-            encoding="utf-8",
-        )
-        if _agent_result.architecture_spec:
-            (stage_dir / "architecture_spec.yaml").write_text(
-                _agent_result.architecture_spec, encoding="utf-8",
+        try:
+            _agent_result = _agent.generate(
+                topic=config.research.topic,
+                exp_plan=exp_plan,
+                metric=metric,
+                pkg_hint=pkg_hint + "\n" + compute_budget + "\n" + extra_guidance,
+                max_tokens=_code_max_tokens,
             )
-        logger.info(
-            "CodeAgent: %d LLM calls, %d sandbox runs, score=%.2f",
-            _agent_result.total_llm_calls,
-            _agent_result.total_sandbox_runs,
-            _agent_result.best_score,
-        )
-    elif not _beast_mode_used and llm is not None:
+            files = _agent_result.files
+            _code_agent_active = True
+
+            # Write agent artifacts
+            (stage_dir / "code_agent_log.json").write_text(
+                json.dumps(
+                    {
+                        "log": _agent_result.validation_log,
+                        "llm_calls": _agent_result.total_llm_calls,
+                        "sandbox_runs": _agent_result.total_sandbox_runs,
+                        "best_score": _agent_result.best_score,
+                        "tree_nodes_explored": _agent_result.tree_nodes_explored,
+                        "review_rounds": _agent_result.review_rounds,
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            if _agent_result.architecture_spec:
+                (stage_dir / "architecture_spec.yaml").write_text(
+                    _agent_result.architecture_spec, encoding="utf-8",
+                )
+            logger.info(
+                "CodeAgent: %d LLM calls, %d sandbox runs, score=%.2f",
+                _agent_result.total_llm_calls,
+                _agent_result.total_sandbox_runs,
+                _agent_result.best_score,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "CodeAgent failed; falling back to legacy Stage 10 generation: %s",
+                exc,
+                exc_info=True,
+            )
+            (stage_dir / "code_agent_log.json").write_text(
+                json.dumps(
+                    {
+                        "error": str(exc),
+                        "log": [],
+                        "llm_calls": 0,
+                        "sandbox_runs": 0,
+                        "best_score": 0.0,
+                        "tree_nodes_explored": 0,
+                        "review_rounds": 0,
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+    if not _beast_mode_used and llm is not None and not _code_agent_active:
         # ── Legacy single-shot generation ─────────────────────────────────
         topic = config.research.topic
         _md = config.experiment.metric_direction
@@ -543,37 +579,44 @@ def _execute_code_generation(
         if any(config.llm.primary_model.startswith(p) for p in ("gpt-5", "o3", "o4")):
             _code_max_tokens = max(_code_max_tokens, 16384)
 
-        resp = _chat_with_prompt(
-            llm,
-            sp.system,
-            sp.user,
-            json_mode=sp.json_mode,
-            max_tokens=_code_max_tokens,
-        )
-        files = _extract_multi_file_blocks(resp.content)
-        if not files and not resp.content.strip():
-            # Empty response — retry with higher token limit
-            logger.warning(
-                "R13-3: Empty LLM response for code_generation (len=%d, "
-                "finish_reason=%s, tokens=%d). Retrying with 32768 tokens.",
-                len(resp.content),
-                resp.finish_reason,
-                resp.total_tokens,
-            )
+        try:
             resp = _chat_with_prompt(
                 llm,
                 sp.system,
                 sp.user,
                 json_mode=sp.json_mode,
-                max_tokens=32768,
+                max_tokens=_code_max_tokens,
             )
             files = _extract_multi_file_blocks(resp.content)
-        if not files:
+            if not files and not resp.content.strip():
+                # Empty response — retry with higher token limit
+                logger.warning(
+                    "R13-3: Empty LLM response for code_generation (len=%d, "
+                    "finish_reason=%s, tokens=%d). Retrying with 32768 tokens.",
+                    len(resp.content),
+                    resp.finish_reason,
+                    resp.total_tokens,
+                )
+                resp = _chat_with_prompt(
+                    llm,
+                    sp.system,
+                    sp.user,
+                    json_mode=sp.json_mode,
+                    max_tokens=32768,
+                )
+                files = _extract_multi_file_blocks(resp.content)
+            if not files:
+                logger.warning(
+                    "R13-2: _extract_multi_file_blocks returned empty. "
+                    "LLM response length=%d, first 300 chars: %s",
+                    len(resp.content),
+                    resp.content[:300],
+                )
+        except Exception as exc:  # noqa: BLE001
             logger.warning(
-                "R13-2: _extract_multi_file_blocks returned empty. "
-                "LLM response length=%d, first 300 chars: %s",
-                len(resp.content),
-                resp.content[:300],
+                "Legacy Stage 10 code generation failed; using generic fallback: %s",
+                exc,
+                exc_info=True,
             )
 
     # --- Fallback: generic numerical experiment ---
@@ -1195,4 +1238,3 @@ Multi-file experiment project with {len(files)} file(s): {file_list}
         artifacts=tuple(artifacts),
         evidence_refs=tuple(f"stage-10/{a}" for a in artifacts),
     )
-

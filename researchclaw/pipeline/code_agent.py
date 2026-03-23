@@ -204,46 +204,79 @@ class CodeAgent:
         arch_spec = ""
         blueprint = None
         if self._cfg.architecture_planning:
-            arch_spec, blueprint = self._phase1_blueprint(
-                topic, exp_plan, metric,
-            )
+            try:
+                arch_spec, blueprint = self._phase1_blueprint(
+                    topic, exp_plan, metric,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "CodeAgent blueprint planning failed; falling back to single-shot",
+                    exc_info=True,
+                )
+                self._log_event(
+                    "  WARNING: Blueprint planning failed — falling back to single-shot"
+                    f" ({type(exc).__name__}: {exc})"
+                )
+                arch_spec = ""
+                blueprint = None
 
         # Phase 2: Code generation
         nodes_explored = 0
-        if self._cfg.tree_search_enabled and self._sandbox_factory:
-            best, nodes_explored = self._phase3_tree_search(
-                topic, exp_plan, metric, pkg_hint, arch_spec, max_tokens,
-            )
-        elif (
-            self._cfg.sequential_generation
-            and blueprint is not None
-            and self._is_valid_blueprint(blueprint)
-        ):
-            # Sequential file generation following blueprint
-            files = self._phase2_sequential_generate(
-                topic, exp_plan, metric, pkg_hint, arch_spec, blueprint,
-            )
-            # Hard validation gates (E-03)
-            if self._cfg.hard_validation:
-                files = self._hard_validate_and_repair(
-                    files, topic, exp_plan, metric, pkg_hint, arch_spec,
+        try:
+            if self._cfg.tree_search_enabled and self._sandbox_factory:
+                best, nodes_explored = self._phase3_tree_search(
+                    topic, exp_plan, metric, pkg_hint, arch_spec, max_tokens,
                 )
-            # Exec-fix loop
-            files = self._exec_fix_loop(files)
-            best = SolutionNode(
-                node_id="sequential", files=files, runs_ok=True, score=1.0,
-            )
-        else:
-            # Fallback: single-shot generation
-            if self._cfg.sequential_generation and blueprint is None:
-                self._log_event(
-                    "  Sequential generation requested but blueprint "
-                    "invalid — falling back to single-shot"
+            elif (
+                self._cfg.sequential_generation
+                and blueprint is not None
+                and self._is_valid_blueprint(blueprint)
+            ):
+                # Sequential file generation following blueprint
+                files = self._phase2_sequential_generate(
+                    topic, exp_plan, metric, pkg_hint, arch_spec, blueprint,
                 )
+                # Hard validation gates (E-03)
+                if self._cfg.hard_validation:
+                    files = self._hard_validate_and_repair(
+                        files, topic, exp_plan, metric, pkg_hint, arch_spec,
+                    )
+                # Exec-fix loop
+                files = self._exec_fix_loop(files)
+                best = SolutionNode(
+                    node_id="sequential", files=files, runs_ok=True, score=1.0,
+                )
+            else:
+                # Fallback: single-shot generation
+                if self._cfg.sequential_generation and blueprint is None:
+                    self._log_event(
+                        "  Sequential generation requested but blueprint "
+                        "invalid — falling back to single-shot"
+                    )
+                files = self._phase2_generate_and_fix(
+                    topic, exp_plan, metric, pkg_hint, arch_spec, max_tokens,
+                )
+                # Hard validation gates (E-03) for single-shot too
+                if self._cfg.hard_validation and files:
+                    files = self._hard_validate_and_repair(
+                        files, topic, exp_plan, metric, pkg_hint, arch_spec,
+                    )
+                best = SolutionNode(
+                    node_id="single", files=files,
+                    runs_ok=bool(files), score=1.0 if files else 0.0,
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "CodeAgent advanced generation failed; retrying with single-shot path",
+                exc_info=True,
+            )
+            self._log_event(
+                "  WARNING: Advanced generation failed — retrying with single-shot"
+                f" ({type(exc).__name__}: {exc})"
+            )
             files = self._phase2_generate_and_fix(
                 topic, exp_plan, metric, pkg_hint, arch_spec, max_tokens,
             )
-            # Hard validation gates (E-03) for single-shot too
             if self._cfg.hard_validation and files:
                 files = self._hard_validate_and_repair(
                     files, topic, exp_plan, metric, pkg_hint, arch_spec,
@@ -256,9 +289,19 @@ class CodeAgent:
         # Phase 5: Review dialog
         review_rounds = 0
         if self._cfg.review_max_rounds > 0:
-            best.files, review_rounds = self._phase4_review(
-                best.files, topic, exp_plan, metric,
-            )
+            try:
+                best.files, review_rounds = self._phase4_review(
+                    best.files, topic, exp_plan, metric,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "CodeAgent review phase failed; keeping pre-review files",
+                    exc_info=True,
+                )
+                self._log_event(
+                    "  WARNING: Review phase failed — keeping pre-review files"
+                    f" ({type(exc).__name__}: {exc})"
+                )
 
         elapsed = time.time() - t0
         self._log_event(

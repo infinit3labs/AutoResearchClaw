@@ -305,29 +305,39 @@ def _execute_experiment_design(
                 "experiment_plan": plan.get("objectives", "") if isinstance(plan, dict) else "",
             })
 
-            # Inject BenchmarkAgent selections into experiment plan
+            # Inject BenchmarkAgent selections into experiment plan only when
+            # its generated artifacts passed validation; otherwise keep the
+            # original plan to avoid propagating invalid agent output.
             if isinstance(plan, dict) and _benchmark_plan.selected_benchmarks:
-                plan["datasets"] = [
-                    b.get("name", "Unknown") for b in _benchmark_plan.selected_benchmarks
-                ]
-                # Normalize existing baselines to list of strings
-                # BUG-35: LLM may emit baselines as dict, list of dicts,
-                # or list of strings — normalize all to list[str].
-                _baselines_from_plan = plan.get("baselines", [])
-                if isinstance(_baselines_from_plan, dict):
-                    _baselines_from_plan = list(_baselines_from_plan.keys())
-                elif isinstance(_baselines_from_plan, list):
-                    _baselines_from_plan = [
-                        item["name"] if isinstance(item, dict) else str(item)
-                        for item in _baselines_from_plan
+                if _benchmark_plan.validation_passed:
+                    plan["datasets"] = [
+                        b.get("name", "Unknown")
+                        for b in _benchmark_plan.selected_benchmarks
                     ]
+                    # Normalize existing baselines to list of strings
+                    # BUG-35: LLM may emit baselines as dict, list of dicts,
+                    # or list of strings — normalize all to list[str].
+                    _baselines_from_plan = plan.get("baselines", [])
+                    if isinstance(_baselines_from_plan, dict):
+                        _baselines_from_plan = list(_baselines_from_plan.keys())
+                    elif isinstance(_baselines_from_plan, list):
+                        _baselines_from_plan = [
+                            item["name"] if isinstance(item, dict) else str(item)
+                            for item in _baselines_from_plan
+                        ]
+                    else:
+                        _baselines_from_plan = []
+                    plan["baselines"] = [
+                        bl.get("name", "Unknown")
+                        for bl in _benchmark_plan.selected_baselines
+                    ] + _baselines_from_plan
+                    # Deduplicate baselines
+                    plan["baselines"] = list(dict.fromkeys(plan["baselines"]))
                 else:
-                    _baselines_from_plan = []
-                plan["baselines"] = [
-                    bl.get("name", "Unknown") for bl in _benchmark_plan.selected_baselines
-                ] + _baselines_from_plan
-                # Deduplicate baselines
-                plan["baselines"] = list(dict.fromkeys(plan["baselines"]))
+                    logger.warning(
+                        "BenchmarkAgent selections failed validation; preserving "
+                        "original experiment plan datasets/baselines"
+                    )
 
             logger.info(
                 "BenchmarkAgent: %d benchmarks, %d baselines selected (%d LLM calls, %.1fs)",

@@ -509,6 +509,111 @@ class TestOrchestrator:
         assert (stage_dir / "selection_results.json").exists()
         assert (stage_dir / "benchmark_plan.json").exists()
 
+    def test_orchestrate_feeds_validation_feedback_into_retry(
+        self, tmp_path: Path
+    ) -> None:
+        from researchclaw.agents.benchmark_agent.orchestrator import (
+            BenchmarkAgentConfig,
+            BenchmarkOrchestrator,
+        )
+
+        responses = [
+            json.dumps({
+                "primary_benchmark": "CIFAR-10",
+                "secondary_benchmarks": [],
+                "selected_baselines": ["ResNet-18"],
+                "rationale": "test",
+                "experiment_notes": "",
+            }),
+            "def get_datasets(data_root='/workspace/data'):\n    return {}",
+            "def get_baselines(num_classes, device='cuda'):\n    return {}",
+            json.dumps({
+                "passed": False,
+                "issues": ["Set download=True for tier-2 datasets"],
+                "suggestions": ["Honor the validator feedback verbatim"],
+                "severity": "error",
+            }),
+            "def get_datasets(data_root='/workspace/data'):\n    return {'fixed': True}",
+            "def get_baselines(num_classes, device='cuda'):\n    return {'baseline': None}",
+            json.dumps({
+                "passed": True,
+                "issues": [],
+                "suggestions": [],
+                "severity": "none",
+            }),
+        ]
+
+        llm = FakeLLM(responses)
+        orchestrator = BenchmarkOrchestrator(
+            llm,
+            config=BenchmarkAgentConfig(enable_hf_search=False, max_iterations=2),
+            stage_dir=tmp_path / "benchmark_agent",
+        )
+        plan = orchestrator.orchestrate({
+            "topic": "Image Classification",
+            "hypothesis": "",
+        })
+
+        assert plan.validation_passed
+        retry_prompts = [
+            call["messages"][0]["content"]
+            for call in llm.calls[4:6]
+        ]
+        assert any(
+            "Set download=True for tier-2 datasets" in prompt
+            for prompt in retry_prompts
+        )
+
+    def test_orchestrate_quarantines_invalid_code_when_validation_never_passes(
+        self, tmp_path: Path
+    ) -> None:
+        from researchclaw.agents.benchmark_agent.orchestrator import (
+            BenchmarkAgentConfig,
+            BenchmarkOrchestrator,
+        )
+
+        responses = [
+            json.dumps({
+                "primary_benchmark": "CIFAR-10",
+                "secondary_benchmarks": [],
+                "selected_baselines": ["ResNet-18"],
+                "rationale": "test",
+                "experiment_notes": "",
+            }),
+            "def get_datasets(data_root='/workspace/data'):\n    return {}",
+            "def get_baselines(num_classes, device='cuda'):\n    return {}",
+            json.dumps({
+                "passed": False,
+                "issues": ["First validation failure"],
+                "suggestions": ["Fix it"],
+                "severity": "error",
+            }),
+            "def get_datasets(data_root='/workspace/data'):\n    return {'retry': 2}",
+            "def get_baselines(num_classes, device='cuda'):\n    return {'retry': 2}",
+            json.dumps({
+                "passed": False,
+                "issues": ["Still invalid after retry"],
+                "suggestions": ["Stop propagating this code"],
+                "severity": "error",
+            }),
+        ]
+
+        orchestrator = BenchmarkOrchestrator(
+            FakeLLM(responses),
+            config=BenchmarkAgentConfig(enable_hf_search=False, max_iterations=2),
+            stage_dir=tmp_path / "benchmark_agent",
+        )
+        plan = orchestrator.orchestrate({
+            "topic": "Image Classification",
+            "hypothesis": "",
+        })
+
+        assert plan.validation_passed is False
+        assert plan.data_loader_code == ""
+        assert plan.baseline_code == ""
+        assert plan.validation_errors == ["Still invalid after retry"]
+        assert plan.validation_suggestions == ["Stop propagating this code"]
+
     def test_plan_to_prompt_block(self) -> None:
         from researchclaw.agents.benchmark_agent.orchestrator import BenchmarkPlan
         plan = BenchmarkPlan(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import http.client
 import json
 import urllib.error
 import urllib.request
@@ -424,3 +425,69 @@ def test_unreachable_primary_endpoint_is_bypassed_for_new_clients(
 
     assert len(primary_attempts) == 1
     assert len(fallback_attempts) == 2
+
+
+def test_call_with_retry_retries_incomplete_read(monkeypatch: pytest.MonkeyPatch):
+    calls: list[str] = []
+
+    def fake_raw_call(
+        self: LLMClient,
+        model: str,
+        messages: list[dict[str, str]],
+        max_tokens: int,
+        temperature: float,
+        json_mode: bool,
+    ) -> LLMResponse:
+        _ = (self, messages, max_tokens, temperature, json_mode)
+        calls.append(model)
+        if len(calls) == 1:
+            raise http.client.IncompleteRead(b'{"choices": [')
+        return LLMResponse(content="ok", model=model)
+
+    monkeypatch.setattr(LLMClient, "_raw_call", fake_raw_call)
+    monkeypatch.setattr("researchclaw.llm.client.time.sleep", lambda _: None)
+
+    client = _make_client(primary_model="gpt-5.2", fallback_models=[])
+    resp = client._call_with_retry(
+        "gpt-5.2",
+        [{"role": "user", "content": "retry me"}],
+        128,
+        0.2,
+        False,
+    )
+
+    assert resp.content == "ok"
+    assert calls == ["gpt-5.2", "gpt-5.2"]
+
+
+def test_call_with_retry_retries_json_decode_error(monkeypatch: pytest.MonkeyPatch):
+    calls: list[str] = []
+
+    def fake_raw_call(
+        self: LLMClient,
+        model: str,
+        messages: list[dict[str, str]],
+        max_tokens: int,
+        temperature: float,
+        json_mode: bool,
+    ) -> LLMResponse:
+        _ = (self, messages, max_tokens, temperature, json_mode)
+        calls.append(model)
+        if len(calls) == 1:
+            raise json.JSONDecodeError("Expecting value", "", 0)
+        return LLMResponse(content="ok-json", model=model)
+
+    monkeypatch.setattr(LLMClient, "_raw_call", fake_raw_call)
+    monkeypatch.setattr("researchclaw.llm.client.time.sleep", lambda _: None)
+
+    client = _make_client(primary_model="gpt-5.2", fallback_models=[])
+    resp = client._call_with_retry(
+        "gpt-5.2",
+        [{"role": "user", "content": "retry json"}],
+        128,
+        0.2,
+        False,
+    )
+
+    assert resp.content == "ok-json"
+    assert calls == ["gpt-5.2", "gpt-5.2"]

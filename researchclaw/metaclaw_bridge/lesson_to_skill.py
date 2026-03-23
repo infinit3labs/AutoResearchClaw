@@ -81,28 +81,67 @@ def _list_existing_skill_names(skills_dir: Path) -> list[str]:
 
 def _parse_skills_response(text: str) -> list[dict[str, str]]:
     """Parse the LLM response into a list of skill dicts."""
-    # Strip markdown code fences if present
-    text = text.strip()
-    if text.startswith("```"):
-        text = re.sub(r"^```\w*\n?", "", text)
-        text = re.sub(r"\n?```\s*$", "", text)
-    try:
-        data = json.loads(text)
-        # Handle both bare array and {"skills": [...]} wrapper
+    def _coerce_skill_list(data: object) -> list[dict[str, str]]:
         if isinstance(data, dict):
-            for key in ("skills", "results", "data"):
-                if key in data and isinstance(data[key], list):
-                    data = data[key]
-                    break
-        if isinstance(data, list):
-            return [
-                s
-                for s in data
-                if isinstance(s, dict)
-                and all(k in s for k in ("name", "description", "category", "content"))
-            ]
-    except json.JSONDecodeError:
-        logger.warning("Failed to parse skill evolution response as JSON")
+            for key in ("skills", "results", "data", "items"):
+                if key in data:
+                    return _coerce_skill_list(data[key])
+            return []
+        if not isinstance(data, list):
+            return []
+        return [
+            s
+            for s in data
+            if isinstance(s, dict)
+            and all(k in s for k in ("name", "description", "category", "content"))
+        ]
+
+    def _try_load(candidate: str) -> list[dict[str, str]]:
+        try:
+            return _coerce_skill_list(json.loads(candidate))
+        except json.JSONDecodeError:
+            return []
+
+    def _extract_balanced_block(source: str, opener: str, closer: str) -> list[str]:
+        blocks: list[str] = []
+        depth = 0
+        start_idx = -1
+        for idx, ch in enumerate(source):
+            if ch == opener:
+                if depth == 0:
+                    start_idx = idx
+                depth += 1
+            elif ch == closer and depth > 0:
+                depth -= 1
+                if depth == 0 and start_idx >= 0:
+                    blocks.append(source[start_idx : idx + 1])
+                    start_idx = -1
+        return blocks
+
+    text = text.strip()
+    candidates: list[str] = [text]
+
+    if text.startswith("```"):
+        unfenced = re.sub(r"^```\w*\n?", "", text)
+        unfenced = re.sub(r"\n?```\s*$", "", unfenced)
+        candidates.append(unfenced.strip())
+
+    fence_blocks = re.findall(r"```(?:json)?\s*\n(.*?)```", text, re.DOTALL)
+    candidates.extend(block.strip() for block in fence_blocks if block.strip())
+
+    candidates.extend(_extract_balanced_block(text, "[", "]"))
+    candidates.extend(_extract_balanced_block(text, "{", "}"))
+
+    seen: set[str] = set()
+    for candidate in candidates:
+        if not candidate or candidate in seen:
+            continue
+        seen.add(candidate)
+        parsed = _try_load(candidate)
+        if parsed:
+            return parsed
+
+    logger.warning("Failed to parse skill evolution response as JSON")
     return []
 
 
@@ -196,6 +235,33 @@ def convert_lessons_to_skills(
         return []
 
     parsed = _parse_skills_response(resp.content)
+    if not parsed:
+        logger.warning(
+            "No valid skills parsed from LLM response; retrying with stricter JSON prompt"
+        )
+        try:
+            retry_resp = llm.chat(
+                [
+                    {
+                        "role": "user",
+                        "content": (
+                            user
+                            + "\n\nReturn ONLY a JSON array of skill objects. "
+                            "Do not wrap it in prose or markdown fences."
+                        ),
+                    }
+                ],
+                system=system,
+                json_mode=True,
+                max_tokens=3000,
+            )
+        except Exception:
+            logger.warning(
+                "Retry LLM call for lesson-to-skill conversion failed",
+                exc_info=True,
+            )
+            return []
+        parsed = _parse_skills_response(retry_resp.content)
     if not parsed:
         logger.warning("No valid skills parsed from LLM response")
         return []

@@ -130,7 +130,10 @@ class TestPhase1Architecture:
 
         agent = CodeAgent(
             llm=llm, prompts=pm,
-            config=CodeAgentConfig(architecture_planning=True),
+            config=CodeAgentConfig(
+                architecture_planning=True,
+                hard_validation=False,
+            ),
             stage_dir=stage_dir,
         )
         result = agent.generate(
@@ -165,6 +168,43 @@ class TestPhase1Architecture:
         first_call_user = llm.calls[0]["messages"][0]["content"]
         # The architecture planning prompt has "Design the architecture" phrasing
         assert "design the architecture for an experiment" not in first_call_user.lower()
+
+    def test_architecture_planning_failure_falls_back_to_single_shot(
+        self, stage_dir: Path, pm: PromptManager, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        llm = FakeLLM()
+
+        def explode(*args: Any, **kwargs: Any) -> tuple[str, dict[str, Any] | None]:
+            _ = args, kwargs
+            raise RuntimeError("blueprint API timeout")
+
+        def fake_single_shot(
+            self, topic: str, exp_plan: str, metric: str,
+            pkg_hint: str, arch_spec: str, max_tokens: int,
+        ) -> dict[str, str]:
+            _ = (self, topic, exp_plan, metric, pkg_hint, arch_spec, max_tokens)
+            return {"main.py": 'print("metric: 1.0")'}
+
+        monkeypatch.setattr(CodeAgent, "_phase1_blueprint", explode)
+        monkeypatch.setattr(CodeAgent, "_phase2_generate_and_fix", fake_single_shot)
+
+        agent = CodeAgent(
+            llm=llm, prompts=pm,
+            config=CodeAgentConfig(
+                architecture_planning=True,
+                hard_validation=False,
+                review_max_rounds=0,
+            ),
+            stage_dir=stage_dir,
+        )
+        result = agent.generate(
+            topic="test topic", exp_plan="objectives: test",
+            metric="accuracy", pkg_hint="numpy, torch",
+        )
+
+        assert result.files["main.py"] == 'print("metric: 1.0")'
+        assert result.architecture_spec == ""
+        assert any("falling back to single-shot" in entry.lower() for entry in result.validation_log)
 
 
 # ---------------------------------------------------------------------------
@@ -417,6 +457,35 @@ class TestPhase4Review:
 
         assert result.review_rounds == 0
         assert result.total_llm_calls == 1  # only codegen
+
+    def test_review_failure_keeps_pre_review_files(
+        self, stage_dir: Path, pm: PromptManager, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        code = '```filename:main.py\nprint("m: 1")\n```'
+        llm = FakeLLM(responses=[code])
+
+        def explode(*args: Any, **kwargs: Any) -> tuple[dict[str, str], int]:
+            _ = args, kwargs
+            raise RuntimeError("review model timeout")
+
+        monkeypatch.setattr(CodeAgent, "_phase4_review", explode)
+
+        agent = CodeAgent(
+            llm=llm, prompts=pm,
+            config=CodeAgentConfig(
+                architecture_planning=False,
+                review_max_rounds=1,
+                hard_validation=False,
+            ),
+            stage_dir=stage_dir,
+        )
+        result = agent.generate(
+            topic="t", exp_plan="p", metric="m", pkg_hint="",
+        )
+
+        assert result.files["main.py"] == 'print("m: 1")'
+        assert result.review_rounds == 0
+        assert any("review phase failed" in entry.lower() for entry in result.validation_log)
 
 
 # ---------------------------------------------------------------------------

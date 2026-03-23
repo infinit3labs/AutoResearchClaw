@@ -1956,6 +1956,160 @@ class TestComputeBudgetBlock:
         assert "60" in all_user_msgs or "Compute Budget" in all_user_msgs
 
 
+class TestBenchmarkPlanValidationGate:
+    """Ensure invalid benchmark-agent output is not reused downstream."""
+
+    def test_experiment_design_preserves_original_plan_when_benchmark_plan_invalid(
+        self,
+        run_dir: Path,
+        rc_config: RCConfig,
+        adapters: AdapterBundle,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import yaml
+        import researchclaw.agents.benchmark_agent as benchmark_agent_module
+        from researchclaw.agents.benchmark_agent.orchestrator import BenchmarkPlan
+
+        class DummyBenchmarkOrchestrator:
+            def __init__(self, *args, **kwargs) -> None:
+                _ = args, kwargs
+
+            def orchestrate(self, context):
+                _ = context
+                return BenchmarkPlan(
+                    selected_benchmarks=[{"name": "BadBench"}],
+                    selected_baselines=[{"name": "BadBase"}],
+                    validation_passed=False,
+                    validation_errors=["invalid benchmark output"],
+                )
+
+        monkeypatch.setattr(
+            benchmark_agent_module,
+            "BenchmarkOrchestrator",
+            DummyBenchmarkOrchestrator,
+        )
+
+        llm = FakeLLMClient(
+            "```yaml\n"
+            "baselines:\n"
+            "  - original_base\n"
+            "proposed_methods:\n"
+            "  - original_method\n"
+            "ablations:\n"
+            "  - original_ablation\n"
+            "datasets:\n"
+            "  - original_dataset\n"
+            "metrics:\n"
+            "  - primary_metric\n"
+            "objectives:\n"
+            "  - original_objective\n"
+            "risks:\n"
+            "  - original_risk\n"
+            "compute_budget:\n"
+            "  max_gpu: 1\n"
+            "  max_hours: 1\n"
+            "```"
+        )
+        stage_dir = run_dir / "stage-09"
+        stage_dir.mkdir(parents=True, exist_ok=True)
+
+        rc_executor._execute_experiment_design(
+            stage_dir, run_dir, rc_config, adapters, llm=llm
+        )
+
+        plan = yaml.safe_load((stage_dir / "exp_plan.yaml").read_text(encoding="utf-8"))
+        assert "original_dataset" in plan["datasets"]
+        assert "BadBench" not in plan["datasets"]
+        assert "original_base" in plan["baselines"]
+        assert "BadBase" not in plan["baselines"]
+
+    def test_code_generation_skips_invalid_benchmark_plan_injection(
+        self, run_dir: Path, rc_config: RCConfig, adapters: AdapterBundle
+    ) -> None:
+        _write_prior_artifact(
+            run_dir,
+            9,
+            "exp_plan.yaml",
+            "objectives:\n  - Keep the original plan\n",
+        )
+        stage09 = run_dir / "stage-09"
+        (stage09 / "benchmark_plan.json").write_text(
+            json.dumps({
+                "selected_benchmarks": [{"name": "BadBench"}],
+                "selected_baselines": [{"name": "BadBase"}],
+                "data_loader_code": "SENTINEL_INVALID_BENCHMARK_CODE()",
+                "baseline_code": "SENTINEL_INVALID_BASELINE_CODE()",
+                "experiment_notes": "Should not leak into prompts",
+                "validation_passed": False,
+                "validation_errors": ["bad benchmark output"],
+            }),
+            encoding="utf-8",
+        )
+
+        object.__setattr__(rc_config.experiment.code_agent, "enabled", False)
+
+        llm = FakeLLMClient(
+            "```filename:main.py\nprint('primary_metric: 0.5')\n```"
+        )
+        stage_dir = run_dir / "stage-10"
+        stage_dir.mkdir(parents=True, exist_ok=True)
+
+        rc_executor._execute_code_generation(
+            stage_dir, run_dir, rc_config, adapters, llm=llm
+        )
+
+        all_user_msgs = " ".join(
+            msg["content"]
+            for call in llm.calls
+            for msg in call
+            if msg.get("role") == "user"
+        )
+        assert "SENTINEL_INVALID_BENCHMARK_CODE" not in all_user_msgs
+        assert "SENTINEL_INVALID_BASELINE_CODE" not in all_user_msgs
+
+
+class TestCodeGenerationFallbacks:
+    def test_code_generation_falls_back_when_code_agent_raises(
+        self,
+        run_dir: Path,
+        rc_config: RCConfig,
+        adapters: AdapterBundle,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _write_prior_artifact(
+            run_dir,
+            9,
+            "exp_plan.yaml",
+            "objectives:\n  - Keep running even if CodeAgent flakes out\n",
+        )
+        llm = FakeLLMClient(
+            "```filename:main.py\nprint('primary_metric: 0.5')\n```"
+        )
+        stage_dir = run_dir / "stage-10"
+        stage_dir.mkdir(parents=True, exist_ok=True)
+
+        def explode_generate(self, *args: object, **kwargs: object):
+            _ = (self, args, kwargs)
+            raise RuntimeError("transient upstream failure")
+
+        monkeypatch.setattr(
+            "researchclaw.pipeline.code_agent.CodeAgent.generate",
+            explode_generate,
+        )
+
+        result = rc_executor._execute_code_generation(
+            stage_dir, run_dir, rc_config, adapters, llm=cast(Any, llm)
+        )
+
+        assert result.status == StageStatus.DONE
+        assert (stage_dir / "experiment" / "main.py").exists()
+        assert llm.calls, "legacy fallback path should still call the LLM"
+        code_agent_log = json.loads(
+            (stage_dir / "code_agent_log.json").read_text(encoding="utf-8")
+        )
+        assert "transient upstream failure" in code_agent_log["error"]
+
+
 class TestPartialTimeoutStatus:
     """Test partial status for timed-out experiments with data (R4-1c)."""
 

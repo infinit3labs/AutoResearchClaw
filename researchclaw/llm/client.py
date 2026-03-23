@@ -11,9 +11,11 @@ Features:
 
 from __future__ import annotations
 
+import http.client
 import json
 import logging
 import os
+import socket
 import time
 import urllib.error
 import urllib.request
@@ -334,6 +336,27 @@ class LLMClient:
                     time.sleep(delay)
                     continue
                 raise
+            except Exception as e:  # noqa: BLE001
+                if not self._is_retryable_transport_error(e):
+                    raise
+
+                if attempt < self.config.max_retries - 1:
+                    delay = self.config.retry_base_delay * (2**attempt)
+                    # Add jitter
+                    import random
+
+                    delay += random.uniform(0, delay * 0.3)
+                    logger.info(
+                        "Retry %d/%d for %s after transient %s. Waiting %.1fs.",
+                        attempt + 1,
+                        self.config.max_retries,
+                        model,
+                        type(e).__name__,
+                        delay,
+                    )
+                    time.sleep(delay)
+                    continue
+                raise
 
         # All retries exhausted
         raise RuntimeError(
@@ -532,6 +555,27 @@ class LLMClient:
                 or "unknown model" in normalized
             )
         )
+
+    @staticmethod
+    def _is_retryable_transport_error(exc: Exception) -> bool:
+        """Return True for transient transport/parsing failures worth retrying."""
+        if isinstance(
+            exc,
+            (
+                TimeoutError,
+                ConnectionError,
+                socket.timeout,
+                EOFError,
+                http.client.HTTPException,
+                json.JSONDecodeError,
+            ),
+        ):
+            return True
+
+        if isinstance(exc, OSError):
+            return True
+
+        return False
 
 
 def create_client_from_yaml(yaml_path: str | None = None) -> LLMClient:

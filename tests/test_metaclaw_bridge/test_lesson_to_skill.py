@@ -1,16 +1,29 @@
 """Tests for lesson-to-skill conversion module."""
 
 import json
-import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 from researchclaw.metaclaw_bridge.lesson_to_skill import (
+    convert_lessons_to_skills,
     _format_lessons,
     _list_existing_skill_names,
     _parse_skills_response,
     _write_skill,
 )
 from researchclaw.evolution import LessonEntry
+
+
+class FakeLLM:
+    def __init__(self, responses: list[str]) -> None:
+        self._responses = list(responses)
+        self.calls = 0
+
+    def chat(self, messages, **kwargs):
+        _ = messages, kwargs
+        self.calls += 1
+        content = self._responses.pop(0) if self._responses else "[]"
+        return SimpleNamespace(content=content)
 
 
 def _make_lesson(stage: str = "experiment_run", severity: str = "error") -> LessonEntry:
@@ -80,6 +93,24 @@ def test_parse_skills_response_invalid():
     assert _parse_skills_response("[]") == []
 
 
+def test_parse_skills_response_with_wrapped_prose():
+    response = (
+        "Here are the generated skills.\n\n"
+        + json.dumps([
+            {
+                "name": "arc-wrapped-skill",
+                "description": "Recover wrapped JSON",
+                "category": "coding",
+                "content": "# Wrapped\n1. Parse nested JSON",
+            }
+        ])
+        + "\n\nUse them carefully."
+    )
+    parsed = _parse_skills_response(response)
+    assert len(parsed) == 1
+    assert parsed[0]["name"] == "arc-wrapped-skill"
+
+
 def test_write_skill(tmp_path):
     skill = {
         "name": "arc-test-skill",
@@ -94,3 +125,27 @@ def test_write_skill(tmp_path):
     assert "name: arc-test-skill" in content
     assert "category: coding" in content
     assert "# Test" in content
+
+
+def test_convert_lessons_to_skills_retries_after_malformed_response(tmp_path):
+    llm = FakeLLM([
+        "not valid json",
+        json.dumps([
+            {
+                "name": "arc-retry-skill",
+                "description": "Retry malformed responses",
+                "category": "coding",
+                "content": "# Retry\n1. Ask again with stricter JSON rules",
+            }
+        ]),
+    ])
+
+    created = convert_lessons_to_skills(
+        [_make_lesson()],
+        llm,
+        tmp_path,
+        max_skills=1,
+    )
+
+    assert created == ["arc-retry-skill"]
+    assert llm.calls == 2

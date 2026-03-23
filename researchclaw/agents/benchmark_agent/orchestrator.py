@@ -79,7 +79,9 @@ class BenchmarkPlan:
     rationale: str = ""
     experiment_notes: str = ""
     validation_passed: bool = False
+    validation_errors: list[str] = field(default_factory=list)
     validation_warnings: list[str] = field(default_factory=list)
+    validation_suggestions: list[str] = field(default_factory=list)
 
     # Stats
     total_llm_calls: int = 0
@@ -99,7 +101,9 @@ class BenchmarkPlan:
             "rationale": self.rationale,
             "experiment_notes": self.experiment_notes,
             "validation_passed": self.validation_passed,
+            "validation_errors": self.validation_errors,
             "validation_warnings": self.validation_warnings,
+            "validation_suggestions": self.validation_suggestions,
             "total_llm_calls": self.total_llm_calls,
             "total_tokens": self.total_tokens,
             "elapsed_sec": self.elapsed_sec,
@@ -271,6 +275,7 @@ class BenchmarkOrchestrator(AgentOrchestrator):
         self._save_artifact("selection_results.json", selection)
 
         # ── Phase 3+4: Acquire + Validate (with retry) ───────────
+        retry_feedback: dict[str, Any] = {}
         for iteration in range(self.max_iterations):
             self.logger.info(
                 "Phase 3: Acquiring code (iteration %d/%d)",
@@ -278,10 +283,13 @@ class BenchmarkOrchestrator(AgentOrchestrator):
             )
 
             # Acquire
-            acq_result = self._acquirer.execute({
+            acq_context: dict[str, Any] = {
                 "topic": topic,
                 "selection": selection,
-            })
+            }
+            if retry_feedback:
+                acq_context["validation_feedback"] = retry_feedback
+            acq_result = self._acquirer.execute(acq_context)
             self._accumulate(acq_result)
 
             if not acq_result.success:
@@ -303,26 +311,47 @@ class BenchmarkOrchestrator(AgentOrchestrator):
             })
             self._accumulate(val_result)
 
-            validation = val_result.data
+            validation = val_result.data if isinstance(val_result.data, dict) else {}
+            if not validation:
+                validation = {
+                    "passed": False,
+                    "errors": [val_result.error or "Validation returned no data"],
+                    "warnings": [],
+                    "suggestions": [],
+                }
             self._save_artifact(f"validation_{iteration}.json", validation)
 
             # Store results
-            plan.data_loader_code = acquisition.get("data_loader_code", "")
-            plan.baseline_code = acquisition.get("baseline_code", "")
-            plan.setup_code = acquisition.get("setup_code", "")
-            plan.requirements = acquisition.get("requirements", "")
             plan.validation_passed = validation.get("passed", False)
+            plan.validation_errors = validation.get("errors", [])
             plan.validation_warnings = validation.get("warnings", [])
+            plan.validation_suggestions = validation.get("suggestions", [])
 
             if plan.validation_passed:
+                plan.data_loader_code = acquisition.get("data_loader_code", "")
+                plan.baseline_code = acquisition.get("baseline_code", "")
+                plan.setup_code = acquisition.get("setup_code", "")
+                plan.requirements = acquisition.get("requirements", "")
                 self.logger.info("Validation passed on iteration %d", iteration + 1)
                 break
 
+            retry_feedback = {
+                "errors": plan.validation_errors,
+                "warnings": plan.validation_warnings,
+                "suggestions": plan.validation_suggestions,
+                "iteration": iteration + 1,
+            }
             self.logger.warning(
                 "Validation failed (iteration %d): %s",
                 iteration + 1,
-                validation.get("errors", []),
+                plan.validation_errors,
             )
+
+        if not plan.validation_passed:
+            plan.data_loader_code = ""
+            plan.baseline_code = ""
+            plan.setup_code = ""
+            plan.requirements = ""
 
         # ── Finalize ──────────────────────────────────────────────
         plan.total_llm_calls = self.total_llm_calls
