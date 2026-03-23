@@ -72,7 +72,7 @@
 ## ⚡ One Command. One Paper.
 
 ```bash
-pip install -e . && researchclaw setup && researchclaw init && researchclaw run --topic "Your research idea here" --auto-approve
+poetry install && poetry run researchclaw setup && poetry run researchclaw init && poetry run researchclaw run --topic "Your research idea here" --auto-approve
 ```
 
 
@@ -106,19 +106,18 @@ The pipeline runs **end-to-end without human intervention**. When experiments fa
 # 1. Clone & install
 git clone https://github.com/aiming-lab/AutoResearchClaw.git
 cd AutoResearchClaw
-python3 -m venv .venv && source .venv/bin/activate
-pip install -e .
+poetry install
 
 # 2. Setup (interactive — installs OpenCode beast mode, checks Docker/LaTeX)
-researchclaw setup
+poetry run researchclaw setup
 
 # 3. Configure
-researchclaw init          # Interactive: choose LLM provider, creates config.arc.yaml
+poetry run researchclaw init          # Interactive: choose LLM provider, creates config.arc.yaml
 # Or manually: cp config.researchclaw.example.yaml config.arc.yaml
 
 # 4. Run
 export OPENAI_API_KEY="sk-..."
-researchclaw run --config config.arc.yaml --topic "Your research idea" --auto-approve
+poetry run researchclaw run --config config.arc.yaml --topic "Your research idea" --auto-approve
 ```
 
 Output → `artifacts/rc-YYYYMMDD-HHMMSS-<hash>/deliverables/` — compile-ready LaTeX, BibTeX, experiment code, charts.
@@ -142,7 +141,7 @@ llm:
 experiment:
   mode: "sandbox"
   sandbox:
-    python_path: ".venv/bin/python"
+    # python_path omitted: defaults to the current interpreter (for `poetry run`, the Poetry env)
 ```
 
 </details>
@@ -182,7 +181,7 @@ If you already use [OpenClaw](https://github.com/openclaw/openclaw) as your AI a
 4️⃣  Done — OpenClaw clones, installs, configures, runs, and returns results
 ```
 
-**That's it.** OpenClaw handles `git clone`, `pip install`, config setup, and pipeline execution automatically. You just chat.
+**That's it.** OpenClaw handles `git clone`, `poetry install`, config setup, and pipeline execution automatically. You just chat.
 
 <details>
 <summary>💡 What happens under the hood</summary>
@@ -191,7 +190,7 @@ If you already use [OpenClaw](https://github.com/openclaw/openclaw) as your AI a
 2. OpenClaw reads `README.md` → understands installation and pipeline structure
 3. OpenClaw copies `config.researchclaw.example.yaml` → `config.yaml`
 4. Asks for your LLM API key (or uses your environment variable)
-5. Runs `pip install -e .` + `researchclaw run --topic "..." --auto-approve`
+5. Runs `poetry install` + `poetry run researchclaw run --topic "..." --auto-approve`
 6. Returns the paper, LaTeX, experiments, and citations
 
 </details>
@@ -238,7 +237,7 @@ llm:
 
 ```bash
 # Just run — the agent uses its own credentials
-researchclaw run --config config.yaml --topic "Your research idea" --auto-approve
+poetry run researchclaw run --config config.yaml --topic "Your research idea" --auto-approve
 ```
 
 ### 🛠️ Other Ways to Run
@@ -361,7 +360,7 @@ metaclaw_bridge:
 
 ```bash
 # 3. Run as usual — MetaClaw works transparently
-researchclaw run --config config.arc.yaml --topic "Your idea" --auto-approve
+poetry run researchclaw run --config config.arc.yaml --topic "Your idea" --auto-approve
 ```
 
 After each run, check `~/.metaclaw/skills/arc-*/SKILL.md` to see the skills your pipeline has learned.
@@ -433,7 +432,7 @@ experiment:
   metric_key: "val_loss"           # Primary metric name
   metric_direction: "minimize"     # minimize | maximize
   sandbox:
-    python_path: ".venv/bin/python"
+    # python_path omitted: defaults to the current interpreter (for `poetry run`, the Poetry env)
     gpu_required: false
     allowed_imports: [math, random, json, csv, numpy, torch, sklearn]
     max_memory_mb: 4096

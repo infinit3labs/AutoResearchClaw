@@ -3,15 +3,18 @@
 ## Setup
 
 1. Fork and clone the repo
-2. Create a venv and install with dev extras:
+2. Install dependencies with Poetry (including dev tools):
+
+   ```bash
+   poetry install --with dev
    ```
-   python3 -m venv .venv && source .venv/bin/activate
-   pip install -e ".[dev]"
-   ```
+
 3. Generate your local config:
+
+   ```bash
+   poetry run researchclaw init
    ```
-   researchclaw init
-   ```
+
 4. Edit `config.arc.yaml` with your LLM settings
 
 ## Config Convention
@@ -22,19 +25,19 @@
 
 ## Running Tests
 
-```
-pytest tests/
+```bash
+poetry run pytest tests/
 ```
 
 ## Checking Your Environment
 
-```
-researchclaw doctor
+```bash
+poetry run researchclaw doctor
 ```
 
 ## PR Guidelines
 
 - Branch from main
 - One concern per PR
-- Ensure `pytest tests/` passes
+- Ensure `poetry run pytest tests/` passes
 - Include tests for new functionality

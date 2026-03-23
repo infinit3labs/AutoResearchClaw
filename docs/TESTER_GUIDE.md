@@ -78,7 +78,7 @@ The pipeline calls a large language model (LLM) at every stage — writing, codi
 > ```bash
 > cd AutoResearchClaw
 > git pull origin main
-> pip install -e .    # Re-install to pick up changes
+> poetry install      # Re-install to pick up changes
 > ```
 >
 > Record your version for the feedback report:
@@ -116,16 +116,11 @@ Claude Code will handle cloning, dependencies, configuration, and execution auto
 git clone https://github.com/aiming-lab/AutoResearchClaw.git
 cd AutoResearchClaw
 
-# 2. Create a virtual environment
-python3 -m venv .venv
-source .venv/bin/activate       # macOS / Linux
-# .venv\Scripts\activate        # Windows (prefer WSL2)
-
-# 3. Install
-pip install -e .
+# 2. Install with Poetry
+poetry install
 
 # 4. Verify
-researchclaw --help
+poetry run researchclaw --help
 ```
 
 ### ⚙️ Configuration
@@ -200,16 +195,15 @@ export S2_API_KEY="your-s2-key"
 ### Quick Start
 
 ```bash
-source .venv/bin/activate
 export OPENAI_API_KEY="sk-xxxx"       # or ANTHROPIC_API_KEY
 
-researchclaw run --config config.yaml --auto-approve
+poetry run researchclaw run --config config.yaml --auto-approve
 ```
 
 ### With a Specific Topic
 
 ```bash
-researchclaw run \
+poetry run researchclaw run \
   --config config.yaml \
   --topic "Investigating the effect of curriculum learning on image classification with adaptive difficulty scheduling" \
   --auto-approve
@@ -238,7 +232,7 @@ Pipeline complete — deliverables at: artifacts/rc-20260315-XXXXXX-YYYY/deliver
 The pipeline supports checkpointing — just resume:
 
 ```bash
-researchclaw run --config config.yaml --resume
+poetry run researchclaw run --config config.yaml --resume
 ```
 
 ---
@@ -493,7 +487,7 @@ A full pipeline run costs roughly **$5–15** in API fees, depending on the mode
 Resume from the checkpoint:
 
 ```bash
-researchclaw run --config config.yaml --resume
+poetry run researchclaw run --config config.yaml --resume
 ```
 
 ### Q4: Can I use a non-English research topic?
@@ -525,7 +519,7 @@ docker build -t researchclaw/experiment:latest researchclaw/docker/
 #       network_policy: "setup_only"  # recommended default
 
 # 3. Run
-researchclaw run --config config.yaml --auto-approve
+poetry run researchclaw run --config config.yaml --auto-approve
 ```
 
 Docker mode uses a three-phase execution model: pip install (network on) → setup.py (network on) → experiment (network off). The image includes pre-cached datasets (CIFAR-10/100, MNIST, FashionMNIST, STL-10, SVHN) so standard benchmarks work without network access.
@@ -537,7 +531,7 @@ Docker mode uses a three-phase execution model: pip install (network on) → set
 ```bash
 cd AutoResearchClaw
 git pull origin main
-pip install -e .
+poetry install
 ```
 
 Then verify your version:

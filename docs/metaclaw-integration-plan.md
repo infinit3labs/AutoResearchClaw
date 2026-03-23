@@ -93,12 +93,10 @@ git checkout -b feat/metaclaw-integration
 #### Task 0.2: MetaClaw 环境配置
 ```bash
 cd /home/jqliu/projects/MetaClaw
-python -m venv .venv
-source .venv/bin/activate
-pip install -e ".[evolve]"    # 安装核心 + 技能进化依赖
+poetry install
 ```
 - 只安装 `skills_only` 模式所需依赖（不需要 GPU / RL）
-- 如需 embedding 检索：`pip install -e ".[embedding]"`
+- 如需 embedding 检索：`poetry install --extras "embedding"`
 
 #### Task 0.3: MetaClaw 基础配置
 创建 `~/.metaclaw/config.yaml`:
@@ -760,8 +758,7 @@ async def _request(self, ...):
 ```bash
 # 1. 启动 MetaClaw 代理
 cd /home/jqliu/projects/MetaClaw
-source .venv/bin/activate
-metaclaw start --mode skills_only --port 30000
+poetry run metaclaw start --mode skills_only --port 30000
 
 # 2. 运行增强版 AutoResearchClaw
 cd /home/jqliu/projects/AutoResearchClaw

@@ -73,7 +73,7 @@
 ## ⚡ Одна команда. Одна статья.
 
 ```bash
-pip install -e . && researchclaw setup && researchclaw init && researchclaw run --topic "Your research idea here" --auto-approve
+poetry install && poetry run researchclaw setup && poetry run researchclaw init && poetry run researchclaw run --topic "Your research idea here" --auto-approve
 ```
 
 
@@ -107,19 +107,18 @@ pip install -e . && researchclaw setup && researchclaw init && researchclaw run 
 # 1. Клонируйте и установите
 git clone https://github.com/aiming-lab/AutoResearchClaw.git
 cd AutoResearchClaw
-python3 -m venv .venv && source .venv/bin/activate
-pip install -e .
+poetry install
 
 # 2. Настройка (интерактивная — устанавливает OpenCode beast mode, проверяет Docker/LaTeX)
-researchclaw setup
+poetry run researchclaw setup
 
 # 3. Конфигурация
-researchclaw init          # Интерактивный: выбор провайдера LLM, создание config.arc.yaml
+poetry run researchclaw init          # Интерактивный: выбор провайдера LLM, создание config.arc.yaml
 # Или вручную: cp config.researchclaw.example.yaml config.arc.yaml
 
 # 4. Запуск
 export OPENAI_API_KEY="sk-..."
-researchclaw run --config config.arc.yaml --topic "Your research idea" --auto-approve
+poetry run researchclaw run --config config.arc.yaml --topic "Your research idea" --auto-approve
 ```
 
 Результаты → `artifacts/rc-YYYYMMDD-HHMMSS-<hash>/deliverables/` — готовые к компиляции LaTeX, BibTeX, код экспериментов, графики.
@@ -143,7 +142,7 @@ llm:
 experiment:
   mode: "sandbox"
   sandbox:
-    python_path: ".venv/bin/python"
+    # python_path omitted: defaults to the current interpreter (for `poetry run`, the Poetry env)
 ```
 
 </details>
@@ -192,7 +191,7 @@ experiment:
 2. OpenClaw читает `README.md` → понимает установку и структуру конвейера
 3. OpenClaw копирует `config.researchclaw.example.yaml` → `config.yaml`
 4. Запрашивает ваш API-ключ LLM (или использует переменную окружения)
-5. Выполняет `pip install -e .` + `researchclaw run --topic "..." --auto-approve`
+5. Выполняет `poetry install` + `poetry run researchclaw run --topic "..." --auto-approve`
 6. Возвращает статью, LaTeX, эксперименты и цитаты
 
 </details>
@@ -239,7 +238,7 @@ llm:
 
 ```bash
 # Просто запускайте — агент использует собственные учётные данные
-researchclaw run --config config.yaml --topic "Your research idea" --auto-approve
+poetry run researchclaw run --config config.yaml --topic "Your research idea" --auto-approve
 ```
 
 ### 🛠️ Другие способы запуска
@@ -362,7 +361,7 @@ metaclaw_bridge:
 
 ```bash
 # 3. Запускайте как обычно — MetaClaw работает прозрачно
-researchclaw run --config config.arc.yaml --topic "Your idea" --auto-approve
+poetry run researchclaw run --config config.arc.yaml --topic "Your idea" --auto-approve
 ```
 
 После каждого запуска проверьте `~/.metaclaw/skills/arc-*/SKILL.md`, чтобы увидеть навыки, которые ваш конвейер освоил.
@@ -434,7 +433,7 @@ experiment:
   metric_key: "val_loss"           # Имя основной метрики
   metric_direction: "minimize"     # minimize | maximize
   sandbox:
-    python_path: ".venv/bin/python"
+    # python_path omitted: defaults to the current interpreter (for `poetry run`, the Poetry env)
     gpu_required: false
     allowed_imports: [math, random, json, csv, numpy, torch, sklearn]
     max_memory_mb: 4096

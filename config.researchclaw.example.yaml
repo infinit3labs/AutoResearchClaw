@@ -66,8 +66,7 @@ experiment:
   metric_key: "primary_metric"
   metric_direction: "minimize"
   sandbox:
-    # Use ".venv/Scripts/python.exe" on Windows
-    python_path: ".venv/bin/python3"
+    # python_path omitted: defaults to the current interpreter (for `poetry run`, the Poetry env)
     gpu_required: false
     max_memory_mb: 4096
   # Docker sandbox settings (only used when mode: "docker")

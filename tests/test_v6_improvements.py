@@ -1,9 +1,9 @@
 """Tests for V6 improvements (IMP-13 through IMP-16).
 
 Run with:
-    .venv/bin/python3 -m pytest tests/test_v6_improvements.py -v
+    poetry run pytest tests/test_v6_improvements.py -v
 or:
-    .venv/bin/python3 tests/test_v6_improvements.py
+    poetry run python tests/test_v6_improvements.py
 """
 from __future__ import annotations
 

@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import io
 import json
+import urllib.error
 import urllib.request
+from email.message import Message
 from types import SimpleNamespace
 from typing import Any, Mapping
+from collections.abc import Generator
 
 import pytest
 
@@ -26,19 +30,33 @@ class _DummyHTTPResponse:
 
 def _make_client(
     *,
+    base_url: str = "https://api.example.com/v1",
     api_key: str = "test-key",
     primary_model: str = "gpt-5.2",
     fallback_models: list[str] | None = None,
     timeout_sec: int = 120,
+    fallback_url: str = "",
+    fallback_api_key: str = "",
 ) -> LLMClient:
     config = LLMConfig(
-        base_url="https://api.example.com/v1",
+        base_url=base_url,
         api_key=api_key,
         primary_model=primary_model,
         fallback_models=fallback_models or ["gpt-5.1", "gpt-4.1", "gpt-4o"],
         timeout_sec=timeout_sec,
+        fallback_url=fallback_url,
+        fallback_api_key=fallback_api_key,
     )
     return LLMClient(config)
+
+
+@pytest.fixture(autouse=True)
+def _reset_llm_runtime_caches() -> Generator[None, None, None]:
+    LLMClient._UNREACHABLE_PRIMARY_URLS.clear()
+    LLMClient._INVALID_MODELS_BY_BASE_URL.clear()
+    yield
+    LLMClient._UNREACHABLE_PRIMARY_URLS.clear()
+    LLMClient._INVALID_MODELS_BY_BASE_URL.clear()
 
 
 def _capture_raw_call(
@@ -321,3 +339,88 @@ def test_chat_uses_fallback_after_first_model_error(monkeypatch: pytest.MonkeyPa
     response = client.chat([{"role": "user", "content": "x"}])
     assert calls == ["gpt-5.2", "gpt-5.1"]
     assert response.model == "gpt-5.1"
+
+
+def test_chat_skips_model_after_not_found_404(monkeypatch: pytest.MonkeyPatch):
+    calls: list[str] = []
+
+    def fake_urlopen(req: urllib.request.Request, timeout: int) -> _DummyHTTPResponse:
+        _ = timeout
+        data = req.data
+        assert isinstance(data, bytes)
+        body = json.loads(data.decode("utf-8"))
+        model = body["model"]
+        calls.append(model)
+
+        if model == "bad/model":
+            raise urllib.error.HTTPError(
+                req.full_url,
+                404,
+                "Not Found",
+                Message(),
+                io.BytesIO(b'{"error": {"message": "Model not found"}}'),
+            )
+
+        return _DummyHTTPResponse(
+            {
+                "model": model,
+                "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
+                "usage": {},
+            }
+        )
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+
+    client = _make_client(primary_model="bad/model", fallback_models=["good/model"])
+    first = client.chat([{"role": "user", "content": "hello"}])
+    second = client.chat([{"role": "user", "content": "hello again"}])
+
+    assert first.model == "good/model"
+    assert second.model == "good/model"
+    assert calls == ["bad/model", "good/model", "good/model"]
+
+
+def test_unreachable_primary_endpoint_is_bypassed_for_new_clients(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    calls: list[str] = []
+    primary_base = "http://localhost:30000"
+    fallback_base = "https://openrouter.ai/api/v1"
+
+    def fake_urlopen(req: urllib.request.Request, timeout: int) -> _DummyHTTPResponse:
+        _ = timeout
+        calls.append(req.full_url)
+        if req.full_url.startswith(primary_base):
+            raise urllib.error.URLError("[Errno 61] Connection refused")
+        return _DummyHTTPResponse(
+            {
+                "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
+                "usage": {},
+            }
+        )
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+
+    first_client = _make_client(
+        base_url=primary_base,
+        primary_model="gpt-5.2",
+        fallback_models=["gpt-4o"],
+        fallback_url=fallback_base,
+        fallback_api_key="fallback-key",
+    )
+    second_client = _make_client(
+        base_url=primary_base,
+        primary_model="gpt-5.2",
+        fallback_models=["gpt-4o"],
+        fallback_url=fallback_base,
+        fallback_api_key="fallback-key",
+    )
+
+    _ = first_client.chat([{"role": "user", "content": "ping"}])
+    _ = second_client.chat([{"role": "user", "content": "ping"}])
+
+    primary_attempts = [u for u in calls if u.startswith(primary_base)]
+    fallback_attempts = [u for u in calls if u.startswith(fallback_base)]
+
+    assert len(primary_attempts) == 1
+    assert len(fallback_attempts) == 2

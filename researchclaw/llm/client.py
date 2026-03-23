@@ -18,7 +18,8 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
-from typing import Any
+from email.message import Message
+from typing import Any, ClassVar
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +81,11 @@ class LLMConfig:
 
 class LLMClient:
     """Stateless OpenAI-compatible chat completion client."""
+
+    # Runtime caches (process-local): reduce repeated failures/log spam
+    # across many stage-level client instantiations in one pipeline run.
+    _UNREACHABLE_PRIMARY_URLS: ClassVar[set[str]] = set()
+    _INVALID_MODELS_BY_BASE_URL: ClassVar[dict[str, set[str]]] = {}
 
     def __init__(self, config: LLMConfig) -> None:
         self.config = config
@@ -175,7 +181,17 @@ class LLMClient:
         if system:
             messages = [{"role": "system", "content": system}] + messages
 
-        models = [model] if model else self._model_chain
+        if model:
+            models = [model]
+        else:
+            invalid_models = self._INVALID_MODELS_BY_BASE_URL.get(
+                self.config.base_url.rstrip("/"),
+                set(),
+            )
+            models = [m for m in self._model_chain if m not in invalid_models]
+            # Safety: never run with an empty model list.
+            if not models:
+                models = list(self._model_chain)
         max_tok = max_tokens or self.config.max_tokens
         temp = temperature if temperature is not None else self.config.temperature
 
@@ -217,12 +233,13 @@ class LLMClient:
         )
         min_tokens = 64 if is_reasoning else 1
         try:
-            _ = self.chat(
+            resp = self.chat(
                 [{"role": "user", "content": "ping"}],
                 max_tokens=min_tokens,
                 temperature=0,
             )
-            return True, f"OK - model {self.config.primary_model} responding"
+            responding_model = resp.model or self.config.primary_model
+            return True, f"OK - model {responding_model} responding"
         except urllib.error.HTTPError as e:
             status_map = {
                 401: "Invalid API key",
@@ -273,6 +290,10 @@ class LLMClient:
                 # Non-retryable errors
                 if status == 403 and "not allowed to use model" in body:
                     raise  # Model not available — let fallback handle
+
+                if status == 404 and self._looks_like_missing_model_error(body):
+                    self._mark_model_invalid(model)
+                    raise  # Permanent model-not-found — let fallback handle
 
                 # 400 is normally non-retryable, but some providers
                 # (Azure OpenAI) return 400 during overload / rate-limit.
@@ -328,7 +349,7 @@ class LLMClient:
         json_mode: bool,
     ) -> LLMResponse:
         """Make a single API call."""
-        
+
         # Use Anthropic adapter if configured
         if self._anthropic:
             data = self._anthropic.chat_completion(model, messages, max_tokens, temperature, json_mode)
@@ -379,45 +400,33 @@ class LLMClient:
                     body["response_format"] = {"type": "json_object"}
 
             payload = json.dumps(body).encode("utf-8")
-            url = f"{self.config.base_url.rstrip('/')}/chat/completions"
-
-            headers = {
-                "Authorization": f"Bearer {self.config.api_key}",
-                "Content-Type": "application/json",
-                "User-Agent": self.config.user_agent,
-            }
-            # MetaClaw bridge: inject extra headers (session ID, stage info, etc.)
-            headers.update(self.config.extra_headers)
-
-            req = urllib.request.Request(url, data=payload, headers=headers)
+            bypass_primary = self._should_bypass_primary_endpoint()
 
             try:
-                with urllib.request.urlopen(req, timeout=self.config.timeout_sec) as resp:
-                    data = json.loads(resp.read())
+                if bypass_primary:
+                    data = self._call_chat_completions_endpoint(
+                        base_url=self.config.fallback_url,
+                        api_key=self.config.fallback_api_key or self.config.api_key,
+                        payload=payload,
+                        include_extra_headers=False,
+                    )
+                else:
+                    data = self._call_chat_completions_endpoint(
+                        base_url=self.config.base_url,
+                        api_key=self.config.api_key,
+                        payload=payload,
+                        include_extra_headers=True,
+                    )
             except (urllib.error.URLError, OSError) as exc:
                 # MetaClaw bridge: fallback to direct LLM if proxy unreachable
-                if self.config.fallback_url:
-                    logger.warning(
-                        "Primary endpoint unreachable, falling back to %s: %s",
-                        self.config.fallback_url,
-                        exc,
+                if self.config.fallback_url and not bypass_primary:
+                    self._mark_primary_endpoint_unreachable(exc)
+                    data = self._call_chat_completions_endpoint(
+                        base_url=self.config.fallback_url,
+                        api_key=self.config.fallback_api_key or self.config.api_key,
+                        payload=payload,
+                        include_extra_headers=False,
                     )
-                    fallback_url = (
-                        f"{self.config.fallback_url.rstrip('/')}/chat/completions"
-                    )
-                    fallback_key = self.config.fallback_api_key or self.config.api_key
-                    fallback_headers = {
-                        "Authorization": f"Bearer {fallback_key}",
-                        "Content-Type": "application/json",
-                        "User-Agent": self.config.user_agent,
-                    }
-                    fallback_req = urllib.request.Request(
-                        fallback_url, data=payload, headers=fallback_headers
-                    )
-                    with urllib.request.urlopen(
-                        fallback_req, timeout=self.config.timeout_sec
-                    ) as resp:
-                        data = json.loads(resp.read())
                 else:
                     raise
 
@@ -428,7 +437,7 @@ class LLMClient:
             error_type = error_info.get("type", "api_error")
             import io
             raise urllib.error.HTTPError(
-                "", 500, f"{error_type}: {error_msg}", {},
+                "", 500, f"{error_type}: {error_msg}", Message(),
                 io.BytesIO(error_msg.encode()),
             )
 
@@ -451,6 +460,77 @@ class LLMClient:
             finish_reason=choice.get("finish_reason", ""),
             truncated=(choice.get("finish_reason", "") == "length"),
             raw=data,
+        )
+
+    def _call_chat_completions_endpoint(
+        self,
+        *,
+        base_url: str,
+        api_key: str,
+        payload: bytes,
+        include_extra_headers: bool,
+    ) -> dict[str, Any]:
+        """POST payload to a chat/completions endpoint and parse JSON."""
+        url = f"{base_url.rstrip('/')}/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "User-Agent": self.config.user_agent,
+        }
+        if include_extra_headers:
+            headers.update(self.config.extra_headers)
+
+        req = urllib.request.Request(url, data=payload, headers=headers)
+        with urllib.request.urlopen(req, timeout=self.config.timeout_sec) as resp:
+            return json.loads(resp.read())
+
+    def _should_bypass_primary_endpoint(self) -> bool:
+        """Return True when primary endpoint is known unreachable in this process."""
+        if not self.config.fallback_url:
+            return False
+        return self.config.base_url.rstrip("/") in self._UNREACHABLE_PRIMARY_URLS
+
+    def _mark_primary_endpoint_unreachable(self, exc: Exception) -> None:
+        """Remember unreachable primary endpoint to avoid repeated failures."""
+        base = self.config.base_url.rstrip("/")
+        if not base:
+            return
+        if base in self._UNREACHABLE_PRIMARY_URLS:
+            return
+        self._UNREACHABLE_PRIMARY_URLS.add(base)
+        logger.warning(
+            "Primary endpoint unreachable, falling back to %s: %s",
+            self.config.fallback_url,
+            exc,
+        )
+
+    def _mark_model_invalid(self, model: str) -> None:
+        """Cache permanently missing model IDs for this base URL."""
+        base = self.config.base_url.rstrip("/")
+        if not base:
+            return
+        bad_models = self._INVALID_MODELS_BY_BASE_URL.setdefault(base, set())
+        if model in bad_models:
+            return
+        bad_models.add(model)
+        logger.warning(
+            "Model %s returned not-found from %s and will be skipped for this run.",
+            model,
+            base,
+        )
+
+    @staticmethod
+    def _looks_like_missing_model_error(body: str) -> bool:
+        """Heuristic for provider errors indicating an unknown model ID."""
+        normalized = (body or "").lower()
+        return (
+            "model" in normalized
+            and (
+                "not found" in normalized
+                or "not available" in normalized
+                or "does not exist" in normalized
+                or "unknown model" in normalized
+            )
         )
 
 

@@ -43,7 +43,7 @@ If you use [OpenClaw](https://github.com/openclaw/openclaw) as your AI assistant
    ```
 4. OpenClaw will:
    - Clone the repo
-   - Create a virtual environment and install dependencies (`pip install -e .`)
+   - Install dependencies with Poetry (`poetry install`)
    - Copy `config.researchclaw.example.yaml` → `config.yaml`
    - Ask you for an OpenAI API key (or use your environment variable)
    - Run the full 23-stage pipeline
@@ -82,23 +82,18 @@ OpenClaw will modify `config.yaml` accordingly before running the pipeline.
 git clone https://github.com/aiming-lab/AutoResearchClaw.git
 cd AutoResearchClaw
 
-# Create a virtual environment (recommended)
-python3 -m venv .venv
-source .venv/bin/activate    # macOS/Linux
-# .venv\Scripts\activate     # Windows
-
-# Install
-pip install -e .
+# Install with Poetry
+poetry install
 ```
 
 ### Verify Installation
 
 ```bash
 # Check the CLI is available
-researchclaw --help
+poetry run researchclaw --help
 
 # Validate your configuration
-researchclaw validate --config config.yaml
+poetry run researchclaw validate --config config.yaml
 ```
 
 ---
@@ -169,7 +164,7 @@ experiment:
   metric_key: "primary_metric" # What metric to optimize
   metric_direction: "minimize" # "minimize" or "maximize"
   sandbox:
-    python_path: ".venv/bin/python3"   # Python binary for sandbox execution
+    # python_path omitted: defaults to the current interpreter (for `poetry run`, the Poetry env)
     gpu_required: false
     max_memory_mb: 4096
 ```
@@ -218,20 +213,20 @@ knowledge_base:
 
 ```bash
 # Run with topic from config.yaml
-researchclaw run --config config.yaml --auto-approve
+poetry run researchclaw run --config config.yaml --auto-approve
 
 # Override topic from command line
-researchclaw run --config config.yaml --topic "Transformer attention for time series" --auto-approve
+poetry run researchclaw run --config config.yaml --topic "Transformer attention for time series" --auto-approve
 ```
 
 ### CLI Commands
 
 | Command | What It Does |
 |---------|-------------|
-| `researchclaw run` | Run the full 23-stage pipeline |
-| `researchclaw validate` | Check your config file for errors |
-| `researchclaw doctor` | Diagnose environment issues (Python, dependencies, API connectivity) |
-| `researchclaw report --run-dir <path>` | Generate a human-readable summary of a completed run |
+| `poetry run researchclaw run` | Run the full 23-stage pipeline |
+| `poetry run researchclaw validate` | Check your config file for errors |
+| `poetry run researchclaw doctor` | Diagnose environment issues (Python, dependencies, API connectivity) |
+| `poetry run researchclaw report --run-dir <path>` | Generate a human-readable summary of a completed run |
 
 ### Run Flags
 
@@ -250,16 +245,16 @@ researchclaw run --config config.yaml --topic "Transformer attention for time se
 
 ```bash
 # Full autonomous run — no human intervention
-researchclaw run -c config.yaml -t "Graph neural networks for protein folding" --auto-approve
+poetry run researchclaw run -c config.yaml -t "Graph neural networks for protein folding" --auto-approve
 
 # Resume a failed run from where it stopped
-researchclaw run -c config.yaml --resume --auto-approve
+poetry run researchclaw run -c config.yaml --resume --auto-approve
 
 # Re-run just the paper writing stages
-researchclaw run -c config.yaml --from-stage PAPER_OUTLINE --auto-approve
+poetry run researchclaw run -c config.yaml --from-stage PAPER_OUTLINE --auto-approve
 
 # Check your setup before running
-researchclaw doctor -c config.yaml
+poetry run researchclaw doctor -c config.yaml
 ```
 
 ---
@@ -426,7 +421,7 @@ The LLM **generates synthetic experiment results** without executing any code. T
 experiment:
   mode: "sandbox"
   sandbox:
-    python_path: ".venv/bin/python3"
+    # python_path omitted: defaults to the current interpreter (for `poetry run`, the Poetry env)
     gpu_required: false
     max_memory_mb: 4096
 ```
@@ -618,7 +613,7 @@ This is an **extension point** — you don't need to configure it for basic usag
 pip install metaclaw
 # Or clone from source:
 git clone https://github.com/aiming-lab/MetaClaw.git
-cd metaclaw && pip install -e .
+cd metaclaw && poetry install
 ```
 
 #### Step 2: Configure
@@ -642,13 +637,13 @@ metaclaw_bridge:
 
 ```bash
 # First run — captures lessons, generates initial skills
-researchclaw run --config config.arc.yaml --topic "Your idea" --auto-approve
+poetry run researchclaw run --config config.arc.yaml --topic "Your idea" --auto-approve
 
 # Check generated skills
 ls ~/.metaclaw/skills/arc-*/SKILL.md
 
 # Second run — skills from Run 1 are automatically injected
-researchclaw run --config config.arc.yaml --topic "Your idea" --auto-approve
+poetry run researchclaw run --config config.arc.yaml --topic "Your idea" --auto-approve
 ```
 
 #### Optional: Start MetaClaw Proxy
@@ -803,7 +798,7 @@ for p in papers:
 
 ```bash
 # Check everything: Python version, dependencies, API connectivity, config validity
-researchclaw doctor --config config.yaml
+poetry run researchclaw doctor --config config.yaml
 ```
 
 ### Common Issues
@@ -811,9 +806,9 @@ researchclaw doctor --config config.yaml
 | Problem | Cause | Solution |
 |---------|-------|----------|
 | `Missing required field: llm.base_url` | Config incomplete | Set `llm.base_url` and `llm.api_key` (or `api_key_env`) |
-| `Config validation FAILED` | Invalid YAML or missing fields | Run `researchclaw validate -c config.yaml` for details |
+| `Config validation FAILED` | Invalid YAML or missing fields | Run `poetry run researchclaw validate -c config.yaml` for details |
 | `Preflight check... FAILED` | LLM API unreachable | Check `base_url`, API key, and network connectivity |
-| Sandbox execution fails | Python path wrong or missing packages | Verify `experiment.sandbox.python_path` exists; ensure numpy is installed |
+| Sandbox execution fails | Python path override is wrong or packages are missing | Remove a bad `experiment.sandbox.python_path` override or point it at a valid interpreter; ensure numpy is installed |
 | Code validation rejects all attempts | LLM generates unsafe code | Switch to `simulated` mode, or try a more capable model |
 | Gate stage blocks pipeline | Manual approval required | Use `--auto-approve` for autonomous mode |
 | Pipeline fails mid-run | Transient API error | Run with `--resume` to continue from the last checkpoint |
@@ -824,10 +819,10 @@ researchclaw doctor --config config.yaml
 
 ```bash
 # Resume from the exact point of failure
-researchclaw run -c config.yaml --resume --auto-approve
+poetry run researchclaw run -c config.yaml --resume --auto-approve
 
 # Or restart from a specific stage
-researchclaw run -c config.yaml --from-stage EXPERIMENT_RUN --auto-approve --output artifacts/<run-id>
+poetry run researchclaw run -c config.yaml --from-stage EXPERIMENT_RUN --auto-approve --output artifacts/<run-id>
 ```
 
 ### Reading a Run Report

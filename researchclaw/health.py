@@ -467,7 +467,7 @@ def check_sandbox_python(python_path: str) -> CheckResult:
             name="sandbox_python",
             status="warn",
             detail="Sandbox python path is empty",
-            fix="Set experiment.sandbox.python_path in config",
+            fix="Set experiment.sandbox.python_path or remove the override to use the current interpreter",
         )
 
     path = Path(python_path)
@@ -481,7 +481,7 @@ def check_sandbox_python(python_path: str) -> CheckResult:
         name="sandbox_python",
         status="warn",
         detail=f"Sandbox python missing or not executable: {path}",
-        fix="Install sandbox interpreter or update experiment.sandbox.python_path",
+        fix="Install the interpreter, update experiment.sandbox.python_path, or remove the override to use the current interpreter",
     )
 
 

@@ -36,6 +36,14 @@ class TestPreflight:
         assert "OK" in msg
         assert "gpt-test" in msg
 
+    def test_preflight_success_reports_actual_response_model(self):
+        client = _make_client(primary_model="bad-primary", fallback_models=["fallback-model"])
+        mock_resp = LLMResponse(content="pong", model="fallback-model")
+        with patch.object(client, "chat", return_value=mock_resp):
+            ok, msg = client.preflight()
+        assert ok is True
+        assert "fallback-model" in msg
+
     def test_preflight_401_invalid_key(self):
         client = _make_client()
         err = urllib.error.HTTPError("url", 401, "Unauthorized", Message(), None)

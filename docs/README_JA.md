@@ -73,7 +73,7 @@
 ## ⚡ ワンコマンド。ワンペーパー。
 
 ```bash
-pip install -e . && researchclaw setup && researchclaw init && researchclaw run --topic "Your research idea here" --auto-approve
+poetry install && poetry run researchclaw setup && poetry run researchclaw init && poetry run researchclaw run --topic "Your research idea here" --auto-approve
 ```
 
 
@@ -107,19 +107,18 @@ pip install -e . && researchclaw setup && researchclaw init && researchclaw run 
 # 1. クローン & インストール
 git clone https://github.com/aiming-lab/AutoResearchClaw.git
 cd AutoResearchClaw
-python3 -m venv .venv && source .venv/bin/activate
-pip install -e .
+poetry install
 
 # 2. セットアップ（対話式 — OpenCode Beast Modeのインストール、Docker/LaTeXの確認）
-researchclaw setup
+poetry run researchclaw setup
 
 # 3. 設定
-researchclaw init          # 対話式：LLMプロバイダーを選択、config.arc.yamlを作成
+poetry run researchclaw init          # 対話式：LLMプロバイダーを選択、config.arc.yamlを作成
 # または手動：cp config.researchclaw.example.yaml config.arc.yaml
 
 # 4. 実行
 export OPENAI_API_KEY="sk-..."
-researchclaw run --config config.arc.yaml --topic "Your research idea" --auto-approve
+poetry run researchclaw run --config config.arc.yaml --topic "Your research idea" --auto-approve
 ```
 
 出力先 → `artifacts/rc-YYYYMMDD-HHMMSS-<hash>/deliverables/` — コンパイル可能なLaTeX、BibTeX、実験コード、チャート。
@@ -143,7 +142,7 @@ llm:
 experiment:
   mode: "sandbox"
   sandbox:
-    python_path: ".venv/bin/python"
+    # python_path omitted: defaults to the current interpreter (for `poetry run`, the Poetry env)
 ```
 
 </details>
@@ -192,7 +191,7 @@ experiment:
 2. OpenClawが`README.md`を読み取り → インストールとパイプライン構造を理解
 3. OpenClawが`config.researchclaw.example.yaml` → `config.yaml`にコピー
 4. LLMのAPIキーを要求（または環境変数を使用）
-5. `pip install -e .` + `researchclaw run --topic "..." --auto-approve`を実行
+5. `poetry install` + `poetry run researchclaw run --topic "..." --auto-approve`を実行
 6. 論文、LaTeX、実験、引用を返却
 
 </details>
@@ -239,7 +238,7 @@ llm:
 
 ```bash
 # そのまま実行 — エージェントは独自の認証情報を使用
-researchclaw run --config config.yaml --topic "Your research idea" --auto-approve
+poetry run researchclaw run --config config.yaml --topic "Your research idea" --auto-approve
 ```
 
 ### 🛠️ その他の実行方法
@@ -362,7 +361,7 @@ metaclaw_bridge:
 
 ```bash
 # 3. 通常通り実行 — MetaClawは透過的に動作
-researchclaw run --config config.arc.yaml --topic "Your idea" --auto-approve
+poetry run researchclaw run --config config.arc.yaml --topic "Your idea" --auto-approve
 ```
 
 各実行後、`~/.metaclaw/skills/arc-*/SKILL.md`を確認して、パイプラインが学習したスキルを確認できます。
@@ -434,7 +433,7 @@ experiment:
   metric_key: "val_loss"           # プライマリメトリクス名
   metric_direction: "minimize"     # minimize | maximize
   sandbox:
-    python_path: ".venv/bin/python"
+    # python_path omitted: defaults to the current interpreter (for `poetry run`, the Poetry env)
     gpu_required: false
     allowed_imports: [math, random, json, csv, numpy, torch, sklearn]
     max_memory_mb: 4096

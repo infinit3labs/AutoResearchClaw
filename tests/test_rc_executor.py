@@ -164,6 +164,84 @@ def test_safe_filename_truncates_to_100_chars() -> None:
     assert cleaned == "x" * 100
 
 
+def test_literature_screen_batches_large_candidate_sets(
+    run_dir: Path,
+    rc_config: RCConfig,
+    adapters: AdapterBundle,
+) -> None:
+    from researchclaw.pipeline.stage_impls._literature import (
+        _execute_literature_screen,
+    )
+
+    rows = []
+    for idx in range(105):
+        rows.append(
+            {
+                "paper_id": f"paper-{idx}",
+                "title": f"Test-driven science for ml systems {idx}",
+                "abstract": (
+                    "This test-driven science study targets machine learning "
+                    "systems with reproducible evaluation and system design. "
+                )
+                * 8,
+                "year": 2024,
+                "source": "openalex",
+                "cite_key": f"paper{idx}",
+                "citation_count": 100 - idx,
+                "url": f"https://example.org/{idx}",
+            }
+        )
+
+    _write_prior_artifact(
+        run_dir,
+        4,
+        "candidates.jsonl",
+        "\n".join(json.dumps(row) for row in rows),
+    )
+
+    stage_dir = run_dir / "stage-05"
+    stage_dir.mkdir(parents=True, exist_ok=True)
+    llm = FakeLLMClient(
+        json.dumps(
+            {
+                "shortlist": [
+                    {
+                        "paper_id": "paper-0",
+                        "title": "Test-driven science for ml systems 0",
+                        "cite_key": "paper0",
+                        "relevance_score": 0.95,
+                        "quality_score": 0.85,
+                        "keep_reason": "Strong topical fit",
+                    }
+                ]
+            }
+        )
+    )
+
+    result = _execute_literature_screen(
+        stage_dir,
+        run_dir,
+        rc_config,
+        adapters,
+        llm=cast(Any, llm),
+        prompts=rc_executor.PromptManager(),
+    )
+
+    assert result.status == StageStatus.DONE
+    assert len(llm.calls) >= 2
+    assert all(len(call[0]["content"]) < 80_000 for call in llm.calls)
+
+    shortlist_rows = [
+        json.loads(line)
+        for line in (stage_dir / "shortlist.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert len(shortlist_rows) >= 15
+    shortlisted = next(row for row in shortlist_rows if row["paper_id"] == "paper-0")
+    assert shortlisted["citation_count"] == 100
+    assert shortlisted["relevance_score"] == 0.95
+
+
 def test_build_context_preamble_basic_fields(
     rc_config: RCConfig, run_dir: Path
 ) -> None:

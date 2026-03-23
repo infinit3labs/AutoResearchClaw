@@ -78,7 +78,7 @@
 > ```bash
 > cd AutoResearchClaw
 > git pull origin main
-> pip install -e .    # 変更を反映するために再インストール
+> poetry install      # 変更を反映するために再インストール
 > ```
 >
 > フィードバックレポート用にバージョンを記録してください：
@@ -116,16 +116,11 @@ Claude Codeがクローン、依存関係、設定、実行をすべて自動で
 git clone https://github.com/aiming-lab/AutoResearchClaw.git
 cd AutoResearchClaw
 
-# 2. 仮想環境を作成
-python3 -m venv .venv
-source .venv/bin/activate       # macOS / Linux
-# .venv\Scripts\activate        # Windows（WSL2推奨）
-
-# 3. インストール
-pip install -e .
+# 2. Poetry でインストール
+poetry install
 
 # 4. 動作確認
-researchclaw --help
+poetry run researchclaw --help
 ```
 
 ### ⚙️ 設定
@@ -200,16 +195,15 @@ export S2_API_KEY="your-s2-key"
 ### クイックスタート
 
 ```bash
-source .venv/bin/activate
 export OPENAI_API_KEY="sk-xxxx"       # または ANTHROPIC_API_KEY
 
-researchclaw run --config config.yaml --auto-approve
+poetry run researchclaw run --config config.yaml --auto-approve
 ```
 
 ### 特定のトピックを指定する場合
 
 ```bash
-researchclaw run \
+poetry run researchclaw run \
   --config config.yaml \
   --topic "Investigating the effect of curriculum learning on image classification with adaptive difficulty scheduling" \
   --auto-approve
@@ -238,7 +232,7 @@ Pipeline complete — deliverables at: artifacts/rc-20260315-XXXXXX-YYYY/deliver
 パイプラインはチェックポイントをサポートしています — 再開するだけです：
 
 ```bash
-researchclaw run --config config.yaml --resume
+poetry run researchclaw run --config config.yaml --resume
 ```
 
 ---
@@ -493,7 +487,7 @@ researchclaw run --config config.yaml --resume
 チェックポイントから再開してください：
 
 ```bash
-researchclaw run --config config.yaml --resume
+poetry run researchclaw run --config config.yaml --resume
 ```
 
 ### Q4: 英語以外の研究トピックを使用できますか？
@@ -525,7 +519,7 @@ docker build -t researchclaw/experiment:latest researchclaw/docker/
 #       network_policy: "setup_only"  # 推奨デフォルト
 
 # 3. 実行
-researchclaw run --config config.yaml --auto-approve
+poetry run researchclaw run --config config.yaml --auto-approve
 ```
 
 Dockerモードは3フェーズの実行モデルを使用します：pip install（ネットワーク有効）→ setup.py（ネットワーク有効）→ 実験（ネットワーク無効）。イメージにはプリキャッシュされたデータセット（CIFAR-10/100、MNIST、FashionMNIST、STL-10、SVHN）が含まれているため、標準的なベンチマークはネットワークアクセスなしで動作します。
@@ -537,7 +531,7 @@ Dockerモードは3フェーズの実行モデルを使用します：pip instal
 ```bash
 cd AutoResearchClaw
 git pull origin main
-pip install -e .
+poetry install
 ```
 
 バージョンを確認してください：

@@ -73,7 +73,7 @@
 ## ⚡ أمر واحد. ورقة واحدة.
 
 ```bash
-pip install -e . && researchclaw setup && researchclaw init && researchclaw run --topic "Your research idea here" --auto-approve
+poetry install && poetry run researchclaw setup && poetry run researchclaw init && poetry run researchclaw run --topic "Your research idea here" --auto-approve
 ```
 
 
@@ -107,19 +107,18 @@ pip install -e . && researchclaw setup && researchclaw init && researchclaw run 
 # 1. استنساخ وتثبيت
 git clone https://github.com/aiming-lab/AutoResearchClaw.git
 cd AutoResearchClaw
-python3 -m venv .venv && source .venv/bin/activate
-pip install -e .
+poetry install
 
 # 2. الإعداد (تفاعلي — يثبّت OpenCode beast mode، يتحقق من Docker/LaTeX)
-researchclaw setup
+poetry run researchclaw setup
 
 # 3. التهيئة
-researchclaw init          # تفاعلي: اختر مزوّد LLM، ينشئ config.arc.yaml
+poetry run researchclaw init          # تفاعلي: اختر مزوّد LLM، ينشئ config.arc.yaml
 # أو يدوياً: cp config.researchclaw.example.yaml config.arc.yaml
 
 # 4. التشغيل
 export OPENAI_API_KEY="sk-..."
-researchclaw run --config config.arc.yaml --topic "Your research idea" --auto-approve
+poetry run researchclaw run --config config.arc.yaml --topic "Your research idea" --auto-approve
 ```
 
 المخرجات → `artifacts/rc-YYYYMMDD-HHMMSS-<hash>/deliverables/` — LaTeX و BibTeX وكود التجارب والرسوم البيانية جاهزة للترجمة.
@@ -143,7 +142,7 @@ llm:
 experiment:
   mode: "sandbox"
   sandbox:
-    python_path: ".venv/bin/python"
+    # python_path omitted: defaults to the current interpreter (for `poetry run`, the Poetry env)
 ```
 
 </details>
@@ -192,7 +191,7 @@ experiment:
 2. يقرأ OpenClaw ملف `README.md` → يفهم التثبيت وبنية خط الأنابيب
 3. يقرأ OpenClaw ملف `config.researchclaw.example.yaml` → `config.yaml`
 4. يسأل عن مفتاح API لنموذج اللغة (أو يستخدم متغير البيئة)
-5. يشغّل `pip install -e .` + `researchclaw run --topic "..." --auto-approve`
+5. يشغّل `poetry install` + `poetry run researchclaw run --topic "..." --auto-approve`
 6. يعيد الورقة و LaTeX والتجارب والاستشهادات
 
 </details>
@@ -239,7 +238,7 @@ llm:
 
 ```bash
 # فقط شغّل — الوكيل يستخدم بيانات اعتماده الخاصة
-researchclaw run --config config.yaml --topic "Your research idea" --auto-approve
+poetry run researchclaw run --config config.yaml --topic "Your research idea" --auto-approve
 ```
 
 ### 🛠️ طرق أخرى للتشغيل
@@ -362,7 +361,7 @@ metaclaw_bridge:
 
 ```bash
 # 3. شغّل كالمعتاد — MetaClaw يعمل بشفافية
-researchclaw run --config config.arc.yaml --topic "Your idea" --auto-approve
+poetry run researchclaw run --config config.arc.yaml --topic "Your idea" --auto-approve
 ```
 
 بعد كل تشغيل، تحقق من `~/.metaclaw/skills/arc-*/SKILL.md` لمشاهدة المهارات التي تعلّمها خط أنابيبك.
@@ -434,7 +433,7 @@ experiment:
   metric_key: "val_loss"           # اسم المقياس الأساسي
   metric_direction: "minimize"     # minimize | maximize
   sandbox:
-    python_path: ".venv/bin/python"
+    # python_path omitted: defaults to the current interpreter (for `poetry run`, the Poetry env)
     gpu_required: false
     allowed_imports: [math, random, json, csv, numpy, torch, sklearn]
     max_memory_mb: 4096

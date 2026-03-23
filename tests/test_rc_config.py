@@ -1,4 +1,5 @@
 import json
+import sys
 from pathlib import Path
 from typing import cast
 
@@ -251,10 +252,24 @@ def test_sandbox_config_defaults_match_expected_values():
     from researchclaw.config import DEFAULT_PYTHON_PATH
     defaults = SandboxConfig()
 
+    assert DEFAULT_PYTHON_PATH == sys.executable
     assert defaults.python_path == DEFAULT_PYTHON_PATH
     assert defaults.gpu_required is False
     assert defaults.max_memory_mb == 4096
     assert "numpy" in defaults.allowed_imports
+
+
+def test_blank_sandbox_python_path_uses_current_interpreter(tmp_path: Path):
+    data = _valid_config_data()
+    data["experiment"] = {
+        "mode": "sandbox",
+        "metric_direction": "minimize",
+        "sandbox": {"python_path": ""},
+    }
+
+    config = RCConfig.from_dict(data, project_root=tmp_path, check_paths=False)
+
+    assert config.experiment.sandbox.python_path == sys.executable
 
 
 def test_to_dict_roundtrip_rehydrates_equivalent_rcconfig(tmp_path: Path):

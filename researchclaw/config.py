@@ -9,7 +9,9 @@ from typing import Any
 import sys
 import yaml
 
-DEFAULT_PYTHON_PATH = ".venv/Scripts/python.exe" if sys.platform == "win32" else ".venv/bin/python3"
+# Default to the interpreter running ResearchClaw. When launched via
+# `poetry run`, this points at the Poetry-managed environment.
+DEFAULT_PYTHON_PATH = sys.executable or ("python.exe" if sys.platform == "win32" else "python3")
 
 CONFIG_SEARCH_ORDER: tuple[str, ...] = ("config.arc.yaml", "config.yaml")
 
@@ -677,7 +679,7 @@ def _parse_experiment_config(data: dict[str, Any]) -> ExperimentConfig:
         metric_direction=data.get("metric_direction", "minimize"),
         keep_threshold=_safe_float(data.get("keep_threshold"), 0.0),
         sandbox=SandboxConfig(
-            python_path=sandbox_data.get("python_path", DEFAULT_PYTHON_PATH),
+            python_path=sandbox_data.get("python_path") or DEFAULT_PYTHON_PATH,
             gpu_required=bool(sandbox_data.get("gpu_required", False)),
             allowed_imports=tuple(
                 sandbox_data.get("allowed_imports", SandboxConfig.allowed_imports)

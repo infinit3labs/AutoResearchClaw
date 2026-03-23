@@ -32,6 +32,10 @@ from researchclaw.prompts import PromptManager
 
 logger = logging.getLogger(__name__)
 
+_SCREENING_MAX_ROWS_PER_BATCH = 40
+_SCREENING_MAX_CHARS_PER_BATCH = 45_000
+_SCREENING_MAX_TOTAL_BATCHES = 8
+
 
 # ---------------------------------------------------------------------------
 # Local helpers
@@ -76,6 +80,114 @@ def _expand_search_queries(queries: list[str], topic: str) -> list[str]:
             seen.add(variant.lower().strip())
 
     return expanded
+
+
+def _screening_row_key(row: dict[str, Any]) -> str:
+    """Build a stable identity key for literature screening rows."""
+    for field in ("paper_id", "id", "cite_key", "doi", "arxiv_id", "url"):
+        value = str(row.get(field, "")).strip()
+        if value:
+            return f"{field}:{value.lower()}"
+    title = str(row.get("title", "")).strip().lower()
+    return f"title:{title}" if title else ""
+
+
+def _screening_priority(row: dict[str, Any]) -> tuple[int, int, int, int, str]:
+    """Sort likely-relevant papers to the front for bounded LLM screening."""
+    overlap = int(row.get("keyword_overlap", 0) or 0)
+    has_abstract = 1 if str(row.get("abstract", "")).strip() else 0
+    citation_count = int(row.get("citation_count", 0) or 0)
+    year = int(row.get("year", 0) or 0)
+    title = str(row.get("title", "")).lower()
+    return (overlap, has_abstract, year, citation_count, title)
+
+
+def _compact_screening_row(row: dict[str, Any]) -> dict[str, Any]:
+    """Keep only the fields needed for relevance/quality screening.
+
+    The full row is restored after LLM screening by matching on a stable key.
+    """
+    compact: dict[str, Any] = {}
+    for field in (
+        "paper_id",
+        "id",
+        "title",
+        "source",
+        "year",
+        "venue",
+        "citation_count",
+        "doi",
+        "arxiv_id",
+        "url",
+        "cite_key",
+        "keyword_overlap",
+    ):
+        if field in row and row.get(field) not in (None, ""):
+            compact[field] = row[field]
+
+    authors = row.get("authors", [])
+    if isinstance(authors, list) and authors:
+        author_names: list[str] = []
+        for author in authors[:4]:
+            if isinstance(author, dict):
+                name = str(author.get("name", "")).strip()
+            else:
+                name = str(author).strip()
+            if name:
+                author_names.append(name)
+        if author_names:
+            compact["authors"] = author_names
+
+    abstract = str(row.get("abstract", "")).strip()
+    if abstract:
+        compact["abstract"] = abstract[:700]
+
+    return compact
+
+
+def _build_screening_batches(rows: list[dict[str, Any]]) -> list[str]:
+    """Split large candidate sets into LLM-safe JSONL batches."""
+    if not rows:
+        return []
+
+    ordered_rows = sorted(rows, key=_screening_priority, reverse=True)
+    batches: list[str] = []
+    current_lines: list[str] = []
+    current_chars = 0
+
+    for row in ordered_rows:
+        compact_row = _compact_screening_row(row)
+        line = json.dumps(compact_row, ensure_ascii=False)
+        line_len = len(line) + 1
+
+        if current_lines and (
+            len(current_lines) >= _SCREENING_MAX_ROWS_PER_BATCH
+            or current_chars + line_len > _SCREENING_MAX_CHARS_PER_BATCH
+        ):
+            batches.append("\n".join(current_lines))
+            if len(batches) >= _SCREENING_MAX_TOTAL_BATCHES:
+                break
+            current_lines = []
+            current_chars = 0
+
+        current_lines.append(line)
+        current_chars += line_len
+
+    if current_lines and len(batches) < _SCREENING_MAX_TOTAL_BATCHES:
+        batches.append("\n".join(current_lines))
+
+    return batches
+
+
+def _merge_screened_row(
+    screened: dict[str, Any],
+    originals_by_key: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """Reattach preserved source fields after screening on compact rows."""
+    key = _screening_row_key(screened)
+    merged = dict(originals_by_key.get(key, {}))
+    merged.update(screened)
+    return merged
 
 
 # ---------------------------------------------------------------------------
@@ -643,26 +755,64 @@ def _execute_literature_screen(
     if llm is not None:
         _pm = prompts or PromptManager()
         _overlay = _get_evolution_overlay(run_dir, "literature_screen")
-        sp = _pm.for_stage(
-            "literature_screen",
-            evolution_overlay=_overlay,
-            topic=config.research.topic,
-            domains=", ".join(config.research.domains)
-            if config.research.domains
-            else "general",
-            quality_threshold=config.research.quality_threshold,
-            candidates_text=candidates_text,
-        )
-        resp = _chat_with_prompt(
-            llm,
-            sp.system,
-            sp.user,
-            json_mode=sp.json_mode,
-            max_tokens=sp.max_tokens,
-        )
-        payload = _safe_json_loads(resp.content, {})
-        if isinstance(payload, dict) and isinstance(payload.get("shortlist"), list):
-            shortlist = [row for row in payload["shortlist"] if isinstance(row, dict)]
+        screening_batches = _build_screening_batches(filtered_rows)
+        if screening_batches:
+            logger.info(
+                "Literature screening: %d filtered candidates split into %d LLM batch(es)",
+                len(filtered_rows),
+                len(screening_batches),
+            )
+
+        originals_by_key = {
+            _screening_row_key(row): row
+            for row in filtered_rows
+            if _screening_row_key(row)
+        }
+        seen_shortlist_keys: set[str] = set()
+
+        for batch_idx, batch_text in enumerate(screening_batches, start=1):
+            sp = _pm.for_stage(
+                "literature_screen",
+                evolution_overlay=_overlay,
+                topic=config.research.topic,
+                domains=", ".join(config.research.domains)
+                if config.research.domains
+                else "general",
+                quality_threshold=config.research.quality_threshold,
+                candidates_text=batch_text,
+            )
+            try:
+                resp = _chat_with_prompt(
+                    llm,
+                    sp.system,
+                    sp.user,
+                    json_mode=sp.json_mode,
+                    max_tokens=sp.max_tokens,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "Literature screening batch %d/%d failed: %s",
+                    batch_idx,
+                    len(screening_batches),
+                    exc,
+                )
+                continue
+
+            payload = _safe_json_loads(resp.content, {})
+            batch_shortlist = payload.get("shortlist", []) if isinstance(payload, dict) else []
+            if not isinstance(batch_shortlist, list):
+                continue
+
+            for row in batch_shortlist:
+                if not isinstance(row, dict):
+                    continue
+                merged = _merge_screened_row(row, originals_by_key)
+                row_key = _screening_row_key(merged)
+                if row_key and row_key in seen_shortlist_keys:
+                    continue
+                if row_key:
+                    seen_shortlist_keys.add(row_key)
+                shortlist.append(merged)
     # T2.2: Ensure minimum shortlist size of 15 for adequate related work
     _MIN_SHORTLIST = 15
     if not shortlist:
