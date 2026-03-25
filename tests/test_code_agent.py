@@ -28,7 +28,7 @@ from researchclaw.prompts import PromptManager
 class FakeLLM:
     """Fake LLM client that returns configurable responses."""
 
-    def __init__(self, responses: list[str] | None = None):
+    def __init__(self, responses: list[str | LLMResponse] | None = None):
         self.calls: list[dict[str, Any]] = []
         self._responses = list(responses or [])
         self._call_idx = 0
@@ -36,11 +36,13 @@ class FakeLLM:
     def chat(self, messages: list[dict], **kwargs: Any) -> LLMResponse:
         self.calls.append({"messages": messages, **kwargs})
         if self._responses:
-            text = self._responses[min(self._call_idx, len(self._responses) - 1)]
+            response = self._responses[min(self._call_idx, len(self._responses) - 1)]
         else:
-            text = '```filename:main.py\nprint("hello")\n```'
+            response = '```filename:main.py\nprint("hello")\n```'
         self._call_idx += 1
-        return LLMResponse(content=text, model="fake-model")
+        if isinstance(response, LLMResponse):
+            return response
+        return LLMResponse(content=response, model="fake-model")
 
 
 @dataclass
@@ -213,6 +215,44 @@ class TestPhase1Architecture:
 
 
 class TestPhase2ExecFix:
+    def test_retries_truncated_generation_before_extracting_files(
+        self, stage_dir: Path, pm: PromptManager,
+    ) -> None:
+        llm = FakeLLM(responses=[
+            LLMResponse(
+                content='```filename:main.py\nprint("partial")',
+                model="fake-model",
+                finish_reason="length",
+                truncated=True,
+            ),
+            LLMResponse(
+                content='```filename:main.py\nprint("metric: 1.0")\n```',
+                model="fake-model",
+                finish_reason="stop",
+                truncated=False,
+            ),
+        ])
+
+        agent = CodeAgent(
+            llm=llm, prompts=pm,
+            config=CodeAgentConfig(
+                architecture_planning=False,
+                hard_validation=False,
+                review_max_rounds=0,
+            ),
+            stage_dir=stage_dir,
+            sandbox_factory=None,
+        )
+        result = agent.generate(
+            topic="t", exp_plan="p", metric="m", pkg_hint="",
+        )
+
+        assert result.files["main.py"] == 'print("metric: 1.0")'
+        assert llm.calls[0].get("strip_thinking") is True
+        assert llm.calls[1].get("strip_thinking") is True
+        assert llm.calls[0].get("max_tokens") == 8192
+        assert llm.calls[1].get("max_tokens") == 32768
+
     def test_exec_fix_loop_fixes_crashing_code(
         self, stage_dir: Path, pm: PromptManager,
     ) -> None:

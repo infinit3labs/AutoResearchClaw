@@ -822,3 +822,38 @@ class TestChatWithPromptStripThinking:
         call_kwargs = mock_llm.chat.call_args
         assert call_kwargs.kwargs.get("strip_thinking") is False
 
+    def test_retries_truncated_response_with_larger_budget(self):
+        """Truncated responses should be retried before returning."""
+        from unittest.mock import MagicMock
+        from researchclaw.pipeline.executor import _chat_with_prompt
+        from researchclaw.llm.client import LLMResponse
+
+        mock_llm = MagicMock()
+        mock_llm.chat.side_effect = [
+            LLMResponse(
+                content='{"status": "partial"',
+                model="test",
+                finish_reason="length",
+                truncated=True,
+            ),
+            LLMResponse(
+                content='{"status": "ok"}',
+                model="test",
+                finish_reason="stop",
+                truncated=False,
+            ),
+        ]
+
+        result = _chat_with_prompt(
+            mock_llm,
+            system="sys",
+            user="hello",
+            json_mode=True,
+            max_tokens=512,
+        )
+
+        assert result.content == '{"status": "ok"}'
+        assert mock_llm.chat.call_count == 2
+        first_call, second_call = mock_llm.chat.call_args_list
+        assert first_call.kwargs.get("max_tokens") == 512
+        assert second_call.kwargs.get("max_tokens") == 32768

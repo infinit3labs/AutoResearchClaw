@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import json
 import logging
 import math
@@ -489,7 +490,21 @@ def _extract_code_block(content: str) -> str:
     match = re.search(r"```(?:python)?\s*(.*?)\s*```", content, flags=re.DOTALL)
     if match is not None:
         return match.group(1).strip()
-    return content.strip()
+
+    stripped = content.strip()
+    if not stripped:
+        return ""
+
+    # If the model started a fenced block but never closed it, fail closed
+    # instead of returning prose/backticks as executable code.
+    if "```" in stripped:
+        return ""
+
+    try:
+        ast.parse(stripped)
+    except SyntaxError:
+        return ""
+    return stripped
 
 
 def _extract_multi_file_blocks(content: str) -> dict[str, str]:
@@ -654,31 +669,64 @@ def _chat_with_prompt(
     import time
 
     messages = [{"role": "user", "content": user}]
-    last_exc: Exception | None = None
-    for attempt in range(1 + retries):
+    current_max_tokens = max_tokens
+    truncation_retries_left = 1
+    attempt = 0
+    while True:
         try:
-            if json_mode and max_tokens is not None:
-                return llm.chat(messages, system=system, json_mode=True, max_tokens=max_tokens, strip_thinking=strip_thinking)
-            if json_mode:
-                return llm.chat(messages, system=system, json_mode=True, strip_thinking=strip_thinking)
-            if max_tokens is not None:
-                return llm.chat(messages, system=system, max_tokens=max_tokens, strip_thinking=strip_thinking)
-            return llm.chat(messages, system=system, strip_thinking=strip_thinking)
+            if json_mode and current_max_tokens is not None:
+                response = llm.chat(
+                    messages,
+                    system=system,
+                    json_mode=True,
+                    max_tokens=current_max_tokens,
+                    strip_thinking=strip_thinking,
+                )
+            elif json_mode:
+                response = llm.chat(
+                    messages,
+                    system=system,
+                    json_mode=True,
+                    strip_thinking=strip_thinking,
+                )
+            elif current_max_tokens is not None:
+                response = llm.chat(
+                    messages,
+                    system=system,
+                    max_tokens=current_max_tokens,
+                    strip_thinking=strip_thinking,
+                )
+            else:
+                response = llm.chat(
+                    messages,
+                    system=system,
+                    strip_thinking=strip_thinking,
+                )
+            if getattr(response, "truncated", False) and truncation_retries_left > 0:
+                truncation_retries_left -= 1
+                current_max_tokens = max(current_max_tokens or 0, 32768)
+                logger.warning(
+                    "LLM response was truncated (finish_reason=%s). "
+                    "Retrying once with max_tokens=%d.",
+                    getattr(response, "finish_reason", ""),
+                    current_max_tokens,
+                )
+                continue
+            return response
         except Exception as exc:  # noqa: BLE001
-            last_exc = exc
             if attempt < retries:
+                attempt += 1
                 delay = 2 ** (attempt + 1)
                 logger.warning(
                     "LLM call failed (attempt %d/%d): %s. Retrying in %ds...",
-                    attempt + 1,
+                    attempt,
                     1 + retries,
                     exc,
                     delay,
                 )
                 time.sleep(delay)
             else:
-                raise last_exc from None
-    raise last_exc  # type: ignore[misc]  # unreachable but satisfies type checker
+                raise exc from None
 
 
 def _get_evolution_overlay(run_dir: Path | None, stage_name: str) -> str:

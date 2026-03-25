@@ -143,6 +143,16 @@ def test_safe_json_loads_valid_and_invalid(payload: str, default, expected) -> N
     assert rc_executor._safe_json_loads(payload, default) == expected
 
 
+def test_extract_code_block_accepts_raw_python_without_fence() -> None:
+    raw = "import math\nprint(math.pi)\n"
+    assert rc_executor._extract_code_block(raw) == raw.strip()
+
+
+def test_extract_multi_file_blocks_rejects_unclosed_fence() -> None:
+    payload = "Here is your code:\n```filename:main.py\nprint('oops')"
+    assert rc_executor._extract_multi_file_blocks(payload) == {}
+
+
 @pytest.mark.parametrize(
     ("raw", "expected"),
     [

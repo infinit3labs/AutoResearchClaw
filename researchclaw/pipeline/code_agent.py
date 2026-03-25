@@ -1342,11 +1342,14 @@ class CodeAgent:
     def _chat(self, system: str, user: str, max_tokens: int = 8192) -> Any:
         """Make an LLM call and track count."""
         self._calls += 1
-        messages = [{"role": "user", "content": user}]
-        return self._llm.chat(
-            messages=messages,
+        from researchclaw.pipeline._helpers import _chat_with_prompt
+
+        return _chat_with_prompt(
+            self._llm,
             system=system,
+            user=user,
             max_tokens=max_tokens,
+            strip_thinking=True,
         )
 
     def _get_or_create_sandbox(self) -> _SandboxLike:
